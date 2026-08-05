@@ -1,0 +1,111 @@
+plugins {
+    id "com.android.application"
+}
+
+// Subconjuntos de Client/Data empacotados no APK.
+//
+// A pasta completa tem ~965 MB (Sound e Music sozinhos somam 304 MB) e nao cabe
+// num APK. Esta lista cresce conforme os subsistemas vao sendo alcancados em
+// execucao; manter em um lugar so evita a copia manual para src/main/assets, que
+// ficava fora do controle de versao do build.
+// Cada entrada e um padrao Ant: "World10" leva a pasta inteira, e um caminho de
+// arquivo leva so ele. Data\Sound tem 94 MB so na raiz, entao nao entra inteira.
+// Subconjunto empacotado no APK.
+//
+// A arvore completa tem 966 MB e nao cabe. O Web resolve com busca sob demanda
+// por HTTP; no Android os arquivos precisam estar no dispositivo, e a unica via
+// que da ao app posse dos arquivos e a extracao do APK: `adb push` para o
+// diretorio externo do app grava como usuario `shell`, e o app fica sem
+// conseguir ENUMERAR o diretorio (`list()` devolve null) -- testado, e sem root
+// no emulador nao ha como corrigir a posse.
+//
+// Por isso a lista cresceu para cobrir a cena de login (~286 MB). Medido pelo
+// que a versao Web de fato buscou: 3077 arquivos, 105 MB, destas pastas.
+ext.muDataSubsets = [
+    // Arquivos na RAIZ de Data. Nenhum padrao "Pasta/**" os pega, e sem
+    // Gate.bmd o cliente chama SendMessage(WM_DESTROY) e encerra.
+    "gate.bmd", "Macro.txt", "Enc1.dat", "Dec2.dat",
+    "World10/**",       // mapa da cena de teste (ainda usado como fallback)
+    "Fonts/**",         // TTF do subsistema de texto (Platform/PlatformText.cpp)
+    "Local/**",         // .bmd de texto/itens lidos por inicializadores estaticos
+    "Configs/**",       // scripts Lua de configuracao (fontes, etc.)
+    "Interface/**",     // UI: titulo, janelas, icones
+    "Custom/**",        // assets customizados deste servidor
+    "World95/**",       // terreno da cena de login (WorldActive 94 le World95)
+    "Object95/**",      // modelos da cena de login: navios, logo 3D
+    "Player/**",        // corpos e equipamentos
+    "Item/**",
+    "NPC/**",
+    "Effect/**",
+    "Skill/**",
+    "Monster/**",
+    // Som: so as duas amostras que verificam o backend OpenSL ES. A pasta
+    // inteira tem 188 MB, e LoadWaveFile falha de forma limpa quando o arquivo
+    // nao existe -- entao a cena sobe sem audio completo.
+    // beep.wav NAO serve: e o unico MS ADPCM do cliente e o leitor so trata PCM.
+    "Sound/mSpider1.wav",   // PCM 8 bits
+    "Sound/iRepair.wav",    // PCM 16 bits
+]
+
+def muClientData = file("${rootDir}/../../../Client/Data")
+def muAssetData  = file("${buildDir}/generated/muAssets/Data")
+
+// Copia so o que a lista pede, e so quando a origem mudou.
+tasks.register("copyMuAssets", Copy) {
+    description = "Copia os subconjuntos de Client/Data para os assets do APK."
+    from(muClientData) {
+        muDataSubsets.each { include it }
+    }
+    into muAssetData
+    // Sem a origem o build nao deve falhar: o APK so fica sem os assets.
+    onlyIf { muClientData.exists() }
+    doFirst {
+        if (!muClientData.exists()) {
+            logger.warn("Client/Data nao encontrado em ${muClientData}; APK sem assets.")
+        }
+    }
+}
+
+android {
+    namespace "com.roxgaming.mulegacy"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.roxgaming.mulegacy"
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+                arguments "-DANDROID_STL=c++_shared", "-DLEGACY_GLES_RENDERER=ON"
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            // O diretorio gerado entra junto com src/main/assets; o conteudo do
+            // jogo vem do primeiro, nao mais de uma copia versionada.
+            assets.srcDirs += file("${buildDir}/generated/muAssets")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+            version "3.22.1"
+        }
+    }
+
+    ndkVersion "25.1.8937393"
+}
+
+// Os assets precisam existir antes de qualquer tarefa de merge.
+tasks.configureEach { task ->
+    if (task.name.startsWith("merge") && task.name.endsWith("Assets")) {
+        task.dependsOn("copyMuAssets")
+    }
+}

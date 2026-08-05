@@ -1,0 +1,25 @@
+NewDebug/
+graphify-out/
+.vs
+.vs/*
+sourceOLD
+imgs
+OPENGL_LEGACY_MULTIPLATFORM_PLAN.md
+debug
+android/app/src/main/assets/Data/*
+android/app/.cxx/Debug/*
+Global Release/
+Global Release/*
+./Global Release/
+android/app/.cxx/Debug/
+android/app/.cxx/Debug/*
+build-web/Data
+build-web/CMakeFiles/
+build-web/*.a
+build-web/*.o
+build-web/*.obj
+build-web/CMakeCache.txt
+build-web/build.ninja
+build-web/cmake_install.cmake
+build-web/.ninja_*
+*.log
