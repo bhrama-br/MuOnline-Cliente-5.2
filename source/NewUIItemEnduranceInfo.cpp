@@ -15,6 +15,67 @@ extern float g_fScreenRate_x;
 
 using namespace SEASON3B;
 
+namespace
+{
+	bool HasEquippedHelperItem()
+	{
+		if (CharacterMachine == NULL || Hero == NULL)
+			return false;
+
+		const int itemType = CharacterMachine->Equipment[EQUIPMENT_HELPER].Type;
+		// Empty slots are -1 (native) or 0 (web); neither is a valid pet type.
+		if (itemType <= 0)
+			return false;
+		// A helper is valid only when it is a pet type supported by the client and
+		// it matches the model currently equipped on the character.
+		const bool isBuiltinPet = itemType == ITEM_HELPER
+			|| itemType == ITEM_HELPER + 1
+			|| itemType == ITEM_HELPER + 2
+			|| itemType == ITEM_HELPER + 3
+			|| itemType == ITEM_HELPER + 4
+			|| itemType == ITEM_HELPER + 37
+			|| itemType == ITEM_HELPER + 64
+			|| itemType == ITEM_HELPER + 65
+			|| itemType == ITEM_HELPER + 67
+			|| itemType == ITEM_HELPER + 80
+			|| itemType == ITEM_HELPER + 106
+			|| itemType == ITEM_HELPER + 123;
+
+		return CharacterMachine->Equipment[EQUIPMENT_HELPER].Durability > 0
+			&& (isBuiltinPet || gHelperSystem.CheckIsHelper(itemType + MODEL_ITEM))
+			&& Hero->Helper.Type == itemType + MODEL_ITEM;
+	}
+
+	bool HasEquippedDarkSpirit()
+	{
+		if (CharacterMachine == NULL || Hero == NULL)
+			return false;
+
+		if (gCharacterManager.GetBaseClass(Hero->Class) != CLASS_DARK_LORD)
+			return false;
+
+		return Hero->m_pPet != NULL
+			&& CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type == ITEM_HELPER + 5
+			&& CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Durability > 0;
+	}
+
+	bool HasEquippedArrow(int arrowType)
+	{
+		if (CharacterMachine == NULL)
+			return false;
+
+		if (arrowType == ITEM_BOW + 15)
+			return CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Type == ITEM_BOW + 15
+				&& CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Durability > 0;
+
+		if (arrowType == ITEM_BOW + 7)
+			return CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type == ITEM_BOW + 7
+				&& CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Durability > 0;
+
+		return false;
+	}
+}
+
 CNewUIItemEnduranceInfo::CNewUIItemEnduranceInfo()
 {
 	memset( &m_UIStartPos, 0, sizeof(POINT) );
@@ -101,14 +162,15 @@ bool SEASON3B::CNewUIItemEnduranceInfo::UpdateMouseEvent()
 
 	iNextPosY += 20;
 	
-	if ( Hero->Helper.Type>= MODEL_HELPER && Hero->Helper.Type<=MODEL_HELPER+4
+	if (HasEquippedHelperItem()
+		&& (Hero->Helper.Type>= MODEL_HELPER && Hero->Helper.Type<=MODEL_HELPER+4
 		|| Hero->Helper.Type == MODEL_HELPER+64
 		|| Hero->Helper.Type == MODEL_HELPER+65
 		|| Hero->Helper.Type == MODEL_HELPER+67
 		|| Hero->Helper.Type == MODEL_HELPER+80
 		|| Hero->Helper.Type == MODEL_HELPER+106
 		|| Hero->Helper.Type == MODEL_HELPER+123
-		|| Hero->Helper.Type == MODEL_HELPER+37	)
+		|| Hero->Helper.Type == MODEL_HELPER+37))
 	{
 		if( CheckMouseIn( m_UIStartPos.x, iNextPosY, PETHP_FRAME_WIDTH, PETHP_FRAME_HEIGHT ) )
 			return false;
@@ -118,7 +180,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::UpdateMouseEvent()
 	
 	if ( gCharacterManager.GetBaseClass(Hero->Class) == CLASS_DARK_LORD )
     {
-		if( Hero->m_pPet != NULL )
+		if (HasEquippedDarkSpirit() && Hero->m_pPet != NULL)
 		{
 			if( CheckMouseIn( m_UIStartPos.x, iNextPosY, PETHP_FRAME_WIDTH, PETHP_FRAME_HEIGHT ) )
 				return false;
@@ -150,6 +212,8 @@ bool SEASON3B::CNewUIItemEnduranceInfo::Update()
 {
 	if( !IsVisible() )
 		return true;
+
+	m_iCurArrowType = ARROWTYPE_NONE;
 
 	if ( gCharacterManager.GetBaseClass(Hero->Class)==CLASS_ELF )
     {
@@ -209,27 +273,13 @@ void SEASON3B::CNewUIItemEnduranceInfo::RenderLeft()
 	
 	bool render = false;
 
-	if (gCharacterManager.GetBaseClass(Hero->Class) == CLASS_ELF && (m_iCurArrowType != ARROWTYPE_NONE || SummonLife > 0))
-	{
-		render = true;
-	}
-	if (Hero->Helper.Type >= MODEL_HELPER && Hero->Helper.Type <= MODEL_HELPER + 4
-		|| Hero->Helper.Type == MODEL_HELPER + 64
-		|| Hero->Helper.Type == MODEL_HELPER + 65
-		|| Hero->Helper.Type == MODEL_HELPER + 67
-		|| Hero->Helper.Type == MODEL_HELPER + 80
-		|| Hero->Helper.Type == MODEL_HELPER + 106
-		|| Hero->Helper.Type == MODEL_HELPER + 123
-		|| Hero->Helper.Type == MODEL_HELPER + 37
-		|| gHelperSystem.CheckIsHelper(Hero->Helper.Type))
-	{
-		render = true;
-	}
-
-	if (gCharacterManager.GetBaseClass(Hero->Class) == CLASS_DARK_LORD && Hero->m_pPet != NULL)
-	{
-		render = true;
-	}
+	// This HUD is exclusively for equipped pets and equipped arrows.  Do not use
+	// Hero->Helper, summon life or arrow inventory counts as visibility signals:
+	// they can retain state after unequipping or when changing characters.
+	const int baseClass = (Hero != NULL) ? gCharacterManager.GetBaseClass(Hero->Class) : -1;
+	render = ((baseClass == CLASS_ELF) && HasEquippedArrow(m_iCurArrowType))
+		|| HasEquippedHelperItem()
+		|| ((baseClass == CLASS_DARK_LORD) && HasEquippedDarkSpirit());
 
 	if (!render) 
 	{
@@ -516,7 +566,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderEquipedHelperLife( int iX, int iY 
 
 bool SEASON3B::CNewUIItemEnduranceInfo::RenderEquipedPetLife( int iX, int iY )
 {
-	if( Hero->m_pPet == NULL )
+	if (Hero->m_pPet == NULL || !HasEquippedDarkSpirit())
 		return false;
 		
 	unicode::t_char szText[256] = {NULL, };
@@ -543,7 +593,7 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderSummonMonsterLife( int iX, int iY 
 
 bool SEASON3B::CNewUIItemEnduranceInfo::RenderNumArrow( int iX, int iY )
 {
-	if( m_iCurArrowType == ARROWTYPE_NONE )
+	if (!HasEquippedArrow(m_iCurArrowType))
 		return false;
 
 	unicode::t_char szText[256] = {NULL, };
@@ -559,9 +609,6 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderNumArrow( int iX, int iY )
 			iNumEquipedArrowDurability = CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Durability;
 		}
 				
-		if( (iNumArrowSetInInven == 0) && (CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Type != ITEM_BOW+15) )
-			return false;
-
 		unicode::_sprintf( szText, GlobalText[351], iNumEquipedArrowDurability, iNumArrowSetInInven );
 	}
 	else if( m_iCurArrowType == ARROWTYPE_CROSSBOW )
@@ -573,9 +620,6 @@ bool SEASON3B::CNewUIItemEnduranceInfo::RenderNumArrow( int iX, int iY )
 			iNumEquipedArrowDurability = CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Durability;
 		}
 				
-		if( (iNumArrowSetInInven == 0) && (CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type != ITEM_BOW+7) )
-			return false;
-
 		unicode::_sprintf( szText, GlobalText[352], iNumEquipedArrowDurability, iNumArrowSetInInven );
 	}
 	

@@ -17,6 +17,10 @@ using namespace SEASON3B;
 
 SEASON3B::CNewUISystem::CNewUISystem()
 {
+	#if defined(__EMSCRIPTEN__)
+	m_iWebViewportWidth = -1;
+	m_iWebViewportHeight = -1;
+	#endif
 	m_pNewUIMng = NULL;
 	m_pNewUIHotKey = NULL;
 	m_pNewChatLogWindow = NULL;
@@ -634,8 +638,85 @@ bool SEASON3B::CNewUISystem::IsVisible(DWORD dwKey)
 	return false;
 }
 
+#if defined(__EMSCRIPTEN__)
+void SEASON3B::CNewUISystem::RefreshWebViewportLayout()
+{
+	// The browser finishes sizing the canvas asynchronously.  Every position below
+	// is the same anchor used by the desktop constructor; applying it again only
+	// when the virtual client size changes keeps drawing and hit tests together.
+	if (m_pNewChaosCastleTime == NULL)
+		return;
+
+	const int width = GetWindowsX;
+	const int height = GetWindowsY;
+	if (width == m_iWebViewportWidth && height == m_iWebViewportHeight)
+		return;
+
+	m_iWebViewportWidth = width;
+	m_iWebViewportHeight = height;
+	GWidescreen.Init();
+
+	m_pNewChatLogWindow->SetPosition(0, setPosDown(415));
+	m_pNewOptionWindow->SetPos((int)setPosCenterX(225), 70);
+	m_pNewMyInventory->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pChaosGenesis->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewNPCShop->SetPos(GWidescreen.WidescreenPosX2, CNewUINPCShop::NPCSHOP_POS_Y);
+	m_pNewPetInfoWindow->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewMixInventory->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewCastleWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewGuardWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewGatemanWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewGateSwitchWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewStorageInventory->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewGuildInfoWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewGuildMakeWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewMyShopInventory->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewPurchaseShopInventory->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewCharacterInfoWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewMyQuestInfoWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewPartyInfoWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewNPCQuest->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewNPCDialogue->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewEnterBloodCastle->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewEnterDevilSquare->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewTrade->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewCommandWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewCatapultWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewBloodCastle->SetPos(width - 127, 480 - 132);
+	m_pNewKanturu2ndEnterNpc->SetPos((int)setPosCenterX(230), 20);
+	m_pNewKanturuInfoWindow->SetPos(width - 99, 351);
+	m_pNewChaosCastleTime->SetPos(width - 127, 480 - 132);
+	m_pNewBattleSoccerScore->SetPos(width - 131, 359);
+	m_pNewWindowMenu->SetPos(width - 112, 480 - 171);
+	m_pNewDuelWindow->SetPos(width - 131, 359);
+	m_pNewSiegeWarfare->SetPos(width - 154, 234);
+	m_pNewCursedTempleEnterWindow->SetPos((int)setPosCenterX(230), 80);
+	m_pNewCursedTempleResultWindow->SetPos((int)setPosCenterX(230), 120);
+	m_pNewMiniMap->SetPos((int)GetCenterPosition(0), 0);
+	m_pNewGoldBowman->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewGoldBowmanLena->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewLuckyCoinRegistration->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewExchangeLuckyCoinWindow->SetPos(GWidescreen.WidescreenPosX2, 0);
+	m_pNewDuelWatchWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewDuelWatchUserListWindow->SetPos(width - 57, 480 - 51);
+	m_pNewDoppelGangerWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewDoppelGangerFrame->SetPos(width - 227, 480 - 51 - 87);
+	m_pNewQuestProgress->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewQuestProgressByEtc->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewEmpireGuardianNPC->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewEmpireGuardianTimer->SetPos(width - 127, 342);
+	m_pNewUnitedMarketPlaceWindow->SetPos(GWidescreen.WidescreenPosX1, 0);
+	m_pNewItemEnduranceInfo->SetPos(width);
+	m_pNewBuffWindow->SetPos(width);
+	m_pNewPartyListWindow->SetPos(width);
+}
+#endif
+
 void SEASON3B::CNewUISystem::Show(DWORD dwKey)
 {
+#if defined(__EMSCRIPTEN__)
+	RefreshWebViewportLayout();
+#endif
 #if defined(__EMSCRIPTEN__)
 	// The browser may finish sizing its canvas after this UI system is created.
 	// Refresh the PC widescreen anchors immediately before opening a window.
@@ -1704,6 +1785,10 @@ bool SEASON3B::CNewUISystem::CheckKeyUse()
 
 bool SEASON3B::CNewUISystem::Update()
 {
+	#if defined(__EMSCRIPTEN__)
+	RefreshWebViewportLayout();
+	#endif
+
 	if(m_pNewItemMng)
 	{
 		m_pNewItemMng->Update();

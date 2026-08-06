@@ -129,10 +129,8 @@ namespace SEASON3B
 		void SetWndPos(int x, int y);
 
 #if defined(__EMSCRIPTEN__)
-		// Keeps the frame and its edit controls aligned after a browser viewport resize.
 		void SetWndPosForWebViewport(int x, int y);
 #endif
-		
 		void SetFont(HFONT hFont);
 
 		bool HaveFocus();

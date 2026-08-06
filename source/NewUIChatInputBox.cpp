@@ -129,6 +129,8 @@ void SEASON3B::CNewUIChatInputBox::SetWndPos(int x, int y)
 #if defined(__EMSCRIPTEN__)
 void SEASON3B::CNewUIChatInputBox::SetWndPosForWebViewport(int x, int y)
 {
+	// No navegador a UI pode ser criada antes de o canvas receber o tamanho final.
+	// Reaplica as mesmas coordenadas usadas em Create(), que sao as do cliente PC.
 	SetWndPos(x, y);
 	SetTextPosition(GetWindowsCX(252.f), y + 2);
 	SetBuddyPosition(GetCenterX(640) + 382, y + 2);

@@ -935,7 +935,9 @@ BOOL ReceiveJoinMapServer(BYTE* ReceiveBuffer, BOOL bEncrypted)
 		CharacterMachine->Equipment[i].Type = -1;
 		CharacterMachine->Equipment[i].Level = 0;
 		CharacterMachine->Equipment[i].Option1 = 0;
+		CharacterMachine->Equipment[i].Durability = 0;
 	}
+	c->Helper.Type = -1;
 	c->ID[MAX_ID_SIZE] = NULL;
 	CreateEffect(BITMAP_MAGIC + 2, o->Position, o->Angle, o->Light, 0, o);
 	CurrentProtocolState = RECEIVE_JOIN_MAP_SERVER;
@@ -8289,8 +8291,8 @@ void ReceiveEventZoneOpenTime(BYTE* ReceiveBuffer)
 			char szOpenTime1[256] = { 0, };
 			char szOpenTime2[256] = { 0, };
 
-			_snprintf_s(szOpenTime1, _countof(szOpenTime1), _TRUNCATE, GlobalText[850], GlobalText[1147]);
-			_snprintf_s(szOpenTime2, _countof(szOpenTime2), _TRUNCATE, GlobalText[1156], GlobalText[1147], Data->KeyM, 100);
+			snprintf(szOpenTime1, sizeof(szOpenTime1), GlobalText[850], GlobalText[1147]);
+			snprintf(szOpenTime2, sizeof(szOpenTime2), GlobalText[1156], GlobalText[1147], Data->KeyM, 100);
 
 			GlobalText.Remove(1154);
 			GlobalText.Remove(1155);
@@ -8313,9 +8315,11 @@ void ReceiveEventZoneOpenTime(BYTE* ReceiveBuffer)
 
 			char szOpenTime[256] = { 0, };
 
-			_snprintf_s(szOpenTime, _countof(szOpenTime), _TRUNCATE, GlobalText[1164], Hour);
-			_snprintf_s(Text, _countof(Text), _TRUNCATE, GlobalText[851], Mini, GlobalText[1147]);
-			strncat_s(szOpenTime, _countof(szOpenTime), Text, _TRUNCATE);
+			snprintf(szOpenTime, sizeof(szOpenTime), GlobalText[1164], Hour);
+			snprintf(Text, sizeof(Text), GlobalText[851], Mini, GlobalText[1147]);
+			const size_t nCurrentLength = strlen(szOpenTime);
+			if (nCurrentLength < sizeof(szOpenTime))
+				snprintf(szOpenTime + nCurrentLength, sizeof(szOpenTime) - nCurrentLength, "%s", Text);
 
 			GlobalText.Remove(1154);
 			GlobalText.Add(1154, szOpenTime);

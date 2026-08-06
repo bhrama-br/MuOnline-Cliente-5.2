@@ -71,7 +71,7 @@ var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIR
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\paulo\AppData\Local\Temp\tmp2ev7a7lf.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmpppp_lnph.js
 
   if (!Module['expectedDataFileDownloads']) Module['expectedDataFileDownloads'] = 0;
   Module['expectedDataFileDownloads']++;
@@ -226,21 +226,21 @@ Module['FS_createPath']("/Data", "World10", true, true);
 
   })();
 
-// end include: C:\Users\paulo\AppData\Local\Temp\tmp2ev7a7lf.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmpwz4nxxdx.js
+// end include: C:\Users\paulo\AppData\Local\Temp\tmpppp_lnph.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmpn4x8dzoz.js
 
     // All the pre-js content up to here must remain later on, we need to run
     // it.
     if ((typeof ENVIRONMENT_IS_WASM_WORKER != 'undefined' && ENVIRONMENT_IS_WASM_WORKER) || (typeof ENVIRONMENT_IS_PTHREAD != 'undefined' && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != 'undefined' && ENVIRONMENT_IS_AUDIO_WORKLET)) Module['preRun'] = [];
     var necessaryPreJSTasks = Module['preRun'].slice();
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmpwz4nxxdx.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmp0n93u9t5.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmpn4x8dzoz.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmpet1u900j.js
 
     if (!Module['preRun']) throw 'Module.preRun should exist because file support used it; did a pre-js delete it?';
     necessaryPreJSTasks.forEach((task) => {
       if (Module['preRun'].indexOf(task) < 0) throw 'All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?';
     });
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmp0n93u9t5.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmpet1u900j.js
 
 
 var programArgs = [];
@@ -5738,6 +5738,38 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       abortOnCannotGrowMemory(requestedSize);
     };
 
+  /** @returns {number} */
+  var convertFrameToPC = (frame) => {
+      var match;
+  
+      if (match = /\bwasm-function\[\d+\]:(0x[0-9a-f]+)/.exec(frame)) {
+        // Wasm engines give the binary offset directly, so we use that as return address
+        return +match[1];
+      } else if (match = /\bwasm-function\[(\d+)\]:(\d+)/.exec(frame)) {
+        // Older versions of v8 (e.g node v10) give function index and offset in
+        // the function.  That format is not supported since it does not provide
+        // the information we need to map the frame to a global program counter.
+        warnOnce('legacy backtrace format detected, this version of v8 is no longer supported by the emscripten backtrace mechanism')
+      } else if (match = /:(\d+):\d+(?:\)|$)/.exec(frame)) {
+        // If we are in js, we can use the js line number as the "return address".
+        // This should work for wasm2js.  We tag the high bit to distinguish this
+        // from wasm addresses.
+        return 0x80000000 | +match[1];
+      }
+      // return 0 if we can't find any
+      return 0;
+    };
+  
+  var _emscripten_return_address = (level) => {
+      var callstack = jsStackTrace().split('\n');
+      if (callstack[0] == 'Error') {
+        callstack.shift();
+      }
+      // skip this function and the caller to get caller's return address
+      var caller = callstack[level + 3];
+      return convertFrameToPC(caller);
+    };
+
   var onExits = [];
   var addOnExit = (cb) => onExits.push(cb);
   var JSEvents = {
@@ -8175,19 +8207,19 @@ function checkIncomingModuleAPI() {
   ignoredModuleProp('wasmBinary');
 }
 var ASM_CONSTS = {
-  204752: ($0) => { var box = document.getElementById('mu_diag'); if (!box) { box = document.createElement('pre'); box.id = 'mu_diag'; box.style.cssText = 'position:fixed;left:0;top:0;right:0;max-height:50%;' + 'overflow:auto;margin:0;padding:8px;z-index:9999;' + 'background:rgba(120,0,0,.9);color:#fff;font:12px monospace;' + 'white-space:pre-wrap'; document.body.appendChild(box); } box.textContent += UTF8ToString($0) + "\n"; },  
- 205166: () => { if (Module.muAudio && Module.muAudio.context) { try { Module.muAudio.context.close(); } catch (e) {} Module.muAudio = null; } },  
- 205296: ($0, $1, $2, $3, $4) => { var audio = Module.muAudio; if (!audio) return 0; var slot = $0; var ptr = $1; var frames = $2; var channels = $3; var rate = $4; var buffer = audio.context.createBuffer(channels, frames, rate); for (var c = 0; c < channels; ++c) { var out = buffer.getChannelData(c); for (var i = 0; i < frames; ++i) { var sample = HEAP16[(ptr >> 1) + i * channels + c]; out[i] = sample / 32768.0; } } audio.buffers[slot] = buffer; if (!audio.gains[slot]) { var gain = audio.context.createGain(); gain.connect(audio.context.destination); audio.gains[slot] = gain; } audio.active[slot] = []; return 1; },  
- 205885: ($0) => { var audio = Module.muAudio; if (!audio) return; delete audio.buffers[$0]; if (audio.gains[$0]) { audio.gains[$0].disconnect(); delete audio.gains[$0]; } delete audio.active[$0]; },  
- 206067: ($0, $1) => { var audio = Module.muAudio; if (!audio || !audio.buffers[$0]) return 0; if (audio.context.state === 'suspended') audio.context.resume(); var source = audio.context.createBufferSource(); source.buffer = audio.buffers[$0]; source.loop = ($1 != 0); source.connect(audio.gains[$0]); var list = audio.active[$0] || (audio.active[$0] = []); source.onended = function() { var index = list.indexOf(source); if (index >= 0) list.splice(index, 1); }; list.push(source); source.start(0); return 1; },  
- 206558: ($0) => { var audio = Module.muAudio; if (!audio || !audio.active[$0]) return; var list = audio.active[$0]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[$0] = []; },  
- 206763: () => { var audio = Module.muAudio; if (!audio) return; for (var slot in audio.active) { var list = audio.active[slot]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[slot] = []; } },  
- 206986: ($0, $1) => { var audio = Module.muAudio; if (audio && audio.gains[$0]) audio.gains[$0].gain.value = $1; },  
- 207081: () => { try { if (!Module.muAudio) { var Context = window.AudioContext || window.webkitAudioContext; if (!Context) return 0; var audio = {}; audio.context = new Context(); audio.buffers = {}; audio.gains = {}; audio.active = {}; Module.muAudio = audio; } return 1; } catch (e) { return 0; } },  
- 207368: ($0) => { var caminho = UTF8ToString($0); var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var dados = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) dados[i] = texto.charCodeAt(i) & 0xFF; var barra = caminho.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {} } try { FS.writeFile(caminho, dados); } catch (e) { err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e); return -2; } return dados.length; },  
- 208116: ($0) => { var caminho = UTF8ToString($0); try { var tamanho = FS.stat(caminho).size; FS.unlink(caminho); return tamanho; } catch (e) { return 0; } },  
- 208257: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var fila = sock.recv_queue ? sock.recv_queue.length : 0; if (fila > 0) return fila; var chave = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[chave] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
- 208678: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
+  206112: ($0) => { var box = document.getElementById('mu_diag'); if (!box) { box = document.createElement('pre'); box.id = 'mu_diag'; box.style.cssText = 'position:fixed;left:0;top:0;right:0;max-height:50%;' + 'overflow:auto;margin:0;padding:8px;z-index:9999;' + 'background:rgba(120,0,0,.9);color:#fff;font:12px monospace;' + 'white-space:pre-wrap'; document.body.appendChild(box); } box.textContent += UTF8ToString($0) + "\n"; },  
+ 206526: () => { if (Module.muAudio && Module.muAudio.context) { try { Module.muAudio.context.close(); } catch (e) {} Module.muAudio = null; } },  
+ 206656: ($0, $1, $2, $3, $4) => { var audio = Module.muAudio; if (!audio) return 0; var slot = $0; var ptr = $1; var frames = $2; var channels = $3; var rate = $4; var buffer = audio.context.createBuffer(channels, frames, rate); for (var c = 0; c < channels; ++c) { var out = buffer.getChannelData(c); for (var i = 0; i < frames; ++i) { var sample = HEAP16[(ptr >> 1) + i * channels + c]; out[i] = sample / 32768.0; } } audio.buffers[slot] = buffer; if (!audio.gains[slot]) { var gain = audio.context.createGain(); gain.connect(audio.context.destination); audio.gains[slot] = gain; } audio.active[slot] = []; return 1; },  
+ 207245: ($0) => { var audio = Module.muAudio; if (!audio) return; delete audio.buffers[$0]; if (audio.gains[$0]) { audio.gains[$0].disconnect(); delete audio.gains[$0]; } delete audio.active[$0]; },  
+ 207427: ($0, $1) => { var audio = Module.muAudio; if (!audio || !audio.buffers[$0]) return 0; if (audio.context.state === 'suspended') audio.context.resume(); var source = audio.context.createBufferSource(); source.buffer = audio.buffers[$0]; source.loop = ($1 != 0); source.connect(audio.gains[$0]); var list = audio.active[$0] || (audio.active[$0] = []); source.onended = function() { var index = list.indexOf(source); if (index >= 0) list.splice(index, 1); }; list.push(source); source.start(0); return 1; },  
+ 207918: ($0) => { var audio = Module.muAudio; if (!audio || !audio.active[$0]) return; var list = audio.active[$0]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[$0] = []; },  
+ 208123: () => { var audio = Module.muAudio; if (!audio) return; for (var slot in audio.active) { var list = audio.active[slot]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[slot] = []; } },  
+ 208346: ($0, $1) => { var audio = Module.muAudio; if (audio && audio.gains[$0]) audio.gains[$0].gain.value = $1; },  
+ 208441: () => { try { if (!Module.muAudio) { var Context = window.AudioContext || window.webkitAudioContext; if (!Context) return 0; var audio = {}; audio.context = new Context(); audio.buffers = {}; audio.gains = {}; audio.active = {}; Module.muAudio = audio; } return 1; } catch (e) { return 0; } },  
+ 208728: ($0) => { var caminho = UTF8ToString($0); var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var dados = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) dados[i] = texto.charCodeAt(i) & 0xFF; var barra = caminho.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {} } try { FS.writeFile(caminho, dados); } catch (e) { err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e); return -2; } return dados.length; },  
+ 209476: ($0) => { var caminho = UTF8ToString($0); try { var tamanho = FS.stat(caminho).size; FS.unlink(caminho); return tamanho; } catch (e) { return 0; } },  
+ 209617: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var fila = sock.recv_queue ? sock.recv_queue.length : 0; if (fila > 0) return fila; var chave = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[chave] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
+ 210038: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
 };
 
 // Imports from the Wasm binary.
@@ -8322,6 +8354,8 @@ var wasmImports = {
   emscripten_get_now: _emscripten_get_now,
   /** @export */
   emscripten_resize_heap: _emscripten_resize_heap,
+  /** @export */
+  emscripten_return_address: _emscripten_return_address,
   /** @export */
   emscripten_set_blur_callback_on_thread: _emscripten_set_blur_callback_on_thread,
   /** @export */

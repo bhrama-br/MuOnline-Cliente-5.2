@@ -142,6 +142,13 @@ namespace SEASON3B
 		void HideAllGroupB();
 		void HideGroupBeforeOpenInterface();
 
+#if defined(__EMSCRIPTEN__)
+		// Reapplies the desktop anchors after the browser canvas acquires a new size.
+		void RefreshWebViewportLayout();
+		int m_iWebViewportWidth;
+		int m_iWebViewportHeight;
+#endif
+
 
 		/* Interface classes */
 	private:
