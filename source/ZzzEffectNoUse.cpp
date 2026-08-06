@@ -225,6 +225,7 @@ void MagicBitmap(int Texture)
 
     glGenTextures(1, &(b->TextureNumber));
     glBindTexture(GL_TEXTURE_2D, b->TextureNumber);
+    Platform::InvalidateLegacyRenderStateCache();
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
@@ -392,6 +393,7 @@ void MappingEffect(int SrcIndex, int DstIndex, int Flag)
     glGenTextures(1, &(dst->TextureNumber));
 
     glBindTexture(GL_TEXTURE_2D, dst->TextureNumber);
+    Platform::InvalidateLegacyRenderStateCache();
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, (int)src->Width, (int)src->Height, 0, GL_RGB, GL_UNSIGNED_BYTE, dst->Buffer);
 }

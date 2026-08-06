@@ -1359,7 +1359,9 @@ void RenderFace(int Texture,int mx,int my)
 	   	DisableAlphaBlend();
 	BindTexture(BITMAP_MAPTILE+Texture);
 
-	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveTriangleFan);
+	// Quads usam o IBO compartilhado do adapter e podem ser acumulados no VBO
+	// dinamico sem mudar a diagonal nem a ordem da antiga triangle fan.
+	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveQuads);
 	Vertex0();
 	Vertex1();
 	Vertex2();
@@ -1378,7 +1380,7 @@ void RenderFace_After(int Texture, int mx, int my)
 	
 	BindTexture(BITMAP_MAPTILE+Texture);
 
-	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveTriangleFan);
+	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveQuads);
 		Vertex0();
 		Vertex1();
 		Vertex2();
@@ -1390,7 +1392,7 @@ void RenderFaceAlpha(int Texture,int mx,int my)
 {
     EnableAlphaTest();
 	BindTexture(BITMAP_MAPTILE+Texture);
-	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveTriangleFan);
+	Platform::GetLegacyRenderAdapter().Begin(Platform::LegacyPrimitiveQuads);
 	VertexAlpha0();
 	VertexAlpha1();
 	VertexAlpha2();
@@ -2592,6 +2594,10 @@ void RenderTerrain(bool EditFlag)
 	}
 
 	TerrainFlag = TERRAIN_MAP_NORMAL;
+	// O terreno base e a grama usam quads independentes. O adaptador descarrega
+	// automaticamente em toda troca de textura/blend, sem reordenar tiles.
+	if (!EditFlag)
+		Platform::GetLegacyRenderAdapter().BeginBatch();
     RenderTerrainFrustrum ( EditFlag );
     //  
 	if ( EditFlag && SelectFlag )
@@ -2606,6 +2612,7 @@ void RenderTerrain(bool EditFlag)
 			TerrainFlag = TERRAIN_MAP_GRASS;
 			RenderTerrainFrustrum ( EditFlag );
 		}
+		Platform::GetLegacyRenderAdapter().EndBatch();
 		DisableDepthTest();
 		EnableCullFace();
 		RenderPointers();

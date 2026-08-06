@@ -369,11 +369,9 @@ extern char ChatText[256];
 
 __forceinline void SendChat(const char* Text)
 {
-	if(ChatTime > 50)
-	{
-		return;
-	}
-	else if(ChatTime > 0)
+	// The frame counter is only useful for avoiding an immediate duplicate.
+	// Do not discard distinct messages while the client is rendering normally.
+	if(ChatTime > 0)
 	{
 		if(strcmp(ChatText,Text)==NULL) return;
 	}

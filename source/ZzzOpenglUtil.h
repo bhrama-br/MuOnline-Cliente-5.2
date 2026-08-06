@@ -121,6 +121,7 @@ float RenderNumber2D(float x,float y,int Num,float Width,float Height);
 // que o estado se perca em silencio numa das plataformas.
 void GetLegacyColor4f(float* destino);
 void SetLegacyTexture2D(bool enabled);
+void SetLegacyDepthTest(bool enabled);
 void SetLegacyAlphaTest(bool enabled);
 void SetLegacyAlphaRef(float reference);
 void SetLegacyFog(bool enabled);

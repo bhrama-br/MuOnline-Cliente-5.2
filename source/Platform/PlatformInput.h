@@ -49,4 +49,5 @@ namespace Platform
     // One-shot request raised by the browser's Enter key while no text field
     // owns focus.  The game loop consumes it on its normal update thread.
     bool ConsumeWebChatOpenRequest();
+    bool ConsumeWebChatSubmitRequest();
 }

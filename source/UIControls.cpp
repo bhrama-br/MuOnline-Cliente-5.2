@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "Platform/LegacyFileAccess.h"
+#include "Platform/LegacyRenderAdapter.h"
 #include "CComGem.h"
 #include "UIControls.h"
 #include "UIWindows.h"
@@ -2778,6 +2779,7 @@ void CUIRenderTextOriginal::UploadText(int sx,int sy,int Width,int Height)
 	if(Width > 0 && Height > 0 && sx+Width > 0 && sy+Height > 0)
 	{
 		glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
+		Platform::InvalidateLegacyRenderStateCache();
 		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,(int)b->Width,(int)b->Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
 
 		float TextureUWidth = (Width+0.01f)/b->Width;
@@ -3420,6 +3422,7 @@ void CUITextInputBox::UploadText(int sx,int sy,int Width,int Height)
 	if(Width > 0 && Height > 0 && sx+Width > 0 && sy+Height > 0)
 	{
 		glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
+		Platform::InvalidateLegacyRenderStateCache();
 		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,(int)b->Width,(int)b->Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
 
 		float TextureUWidth = (Width+0.01f)/b->Width;

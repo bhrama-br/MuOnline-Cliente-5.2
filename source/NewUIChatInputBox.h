@@ -7,6 +7,7 @@
 #include "NewUIBase.h"
 #include "ZzzTexture.h"
 #include "NewUIButton.h"
+#include "ChatInputController.h"
 
 #pragma warning(disable : 4786)
 #include <string>
@@ -104,6 +105,7 @@ namespace SEASON3B
 		bool m_bWhisperSend;
 		bool m_bShowMessageElseNormal;
 		bool m_ShowMenuChat;
+		ChatInputController m_inputController;
 		
 		const int MAX_CHAT_SIZE_UTF16;
 
@@ -148,6 +150,8 @@ namespace SEASON3B
 		
 		bool UpdateMouseEvent();
 		bool UpdateKeyEvent();
+		void RequestWebOpen();
+		void RequestWebSubmit();
 		bool Update();
 		bool Render();
 

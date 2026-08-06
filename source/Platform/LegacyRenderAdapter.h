@@ -2,6 +2,26 @@
 
 namespace Platform
 {
+    // Contadores do caminho legado moderno desde o ultimo Reset. O ciclo de frame
+    // (e a apresentacao do overlay/CSV) pode ser conectado sem expor detalhes GL
+    // aos chamadores do renderer.
+    struct LegacyRenderFrameStats
+    {
+        LegacyRenderFrameStats()
+            : drawCalls(0), vertices(0), vertexUploadBytes(0), textureChanges(0),
+              programChanges(0), depthStateChanges(0), alphaTestChanges(0), fogChanges(0), blendStateChanges(0) {}
+
+        unsigned long long drawCalls;
+        unsigned long long vertices;
+        unsigned long long vertexUploadBytes;
+        unsigned long long textureChanges;
+        unsigned long long programChanges;
+        unsigned long long depthStateChanges;
+        unsigned long long alphaTestChanges;
+        unsigned long long fogChanges;
+        unsigned long long blendStateChanges;
+    };
+
     enum LegacyPrimitive
     {
         LegacyPrimitiveQuads,
@@ -34,6 +54,18 @@ namespace Platform
         { (void)enabled; (void)color; (void)start; (void)end; }
         virtual void SetTexture2D(bool enabled) { (void)enabled; }
         virtual void BindTexture(unsigned int texture) { (void)texture; }
+        virtual void SetBlendMode(int mode) { (void)mode; }
+        // Lote explicito para UI: preserva a ordem e so agrega quads consecutivos
+        // com o mesmo estado. O caminho legado padrao continua imediato.
+        virtual void BeginBatch() {}
+        virtual void EndBatch() {}
+        // Barreira para leituras de framebuffer e codigo GL externo.
+        virtual void FlushBatch() {}
+        virtual void ResetFrameStats() {}
+        virtual LegacyRenderFrameStats GetFrameStats() const { return LegacyRenderFrameStats(); }
+        // Deve ser chamado por codigo que altera estado GL diretamente, antes
+        // de devolver o controle ao adaptador.
+        virtual void InvalidateStateCache() {}
         // Descarta shader/VAO/VBO apos a destruicao do contexto grafico. Sem isso
         // o backend GLSL segue usando nomes de objeto de um contexto morto e para
         // de desenhar silenciosamente.
@@ -46,6 +78,11 @@ namespace Platform
 
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();
+    // Materializa os sprites pendentes antes de observar ou alterar o framebuffer.
+    void FlushLegacyRenderBatch();
+    void ResetLegacyRenderFrameStats();
+    LegacyRenderFrameStats GetLegacyRenderFrameStats();
+    void InvalidateLegacyRenderStateCache();
 
     // Diagnostico do backend GLSL. Sem um logger registrado, falhas de
     // carregamento de funcoes, compilacao e link de shader ficam silenciosas e o

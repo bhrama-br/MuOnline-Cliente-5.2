@@ -2,6 +2,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "Platform/LegacyRenderAdapter.h"
 #include "UIManager.h"
 #include "GuildCache.h"
 #include "ZzzOpenglUtil.h"
@@ -2364,6 +2365,12 @@ void UpdateSceneState()
 {
 	g_pNewKeyInput->ScanAsyncKeyState();
 
+	// SendChat starts this legacy counter at 70.  The Winmain frame loop used
+	// to advance it implicitly; the shared scene runner must do it explicitly
+	// so a first message never blocks the rest of the session.
+	if (ChatTime > 0)
+		--ChatTime;
+
 	g_dwMouseUseUIID = 0;
 
 	switch (SceneFlag)
@@ -2890,7 +2897,11 @@ bool CheckRenderNextFrame()
 
 void RenderScene(HDC hDC)
 {
-	CalcFPS();
+    // A amostra e zerada antes de qualquer emissao deste quadro. Depois do
+    // SwapBuffers, GetLegacyRenderFrameStats() contem exatamente o frame que
+    // acabou de ser apresentado, pronto para o futuro overlay/CSV.
+    Platform::ResetLegacyRenderFrameStats();
+    CalcFPS();
 	UpdateSceneState();
 
 	last_render_tick_count = current_tick_count;

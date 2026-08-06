@@ -232,6 +232,9 @@ namespace
 
     void RenderLegacyFrame()
     {
+        // Mantem a mesma semantica da versao PC: uma amostra corresponde a
+        // uma execucao completa do callback de animation frame.
+        Platform::ResetLegacyRenderFrameStats();
         // Eventos de socket. No Windows o Winsock os entrega ao window
         // proc; aqui um select() por quadro faz o mesmo trabalho.
         Platform::PumpLegacySocket();

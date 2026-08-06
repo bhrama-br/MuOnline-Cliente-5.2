@@ -473,6 +473,7 @@
     <ClCompile Include="source\Platform\LegacySceneRunner.cpp" />
     <ClCompile Include="source\Platform\LegacyRenderAdapter.cpp" />
     <ClCompile Include="source\Platform\GlslLegacyRenderAdapter.cpp" />
+    <ClCompile Include="source\Platform\RenderPipeline.cpp" />
     <ClCompile Include="source\Platform\LegacyFileAccess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -952,6 +953,7 @@
     <ClInclude Include="source\Platform\PlatformInput.h" />
     <ClInclude Include="source\Platform\LegacySceneRunner.h" />
     <ClInclude Include="source\Platform\LegacyRenderAdapter.h" />
+    <ClInclude Include="source\Platform\RenderPipeline.h" />
     <ClInclude Include="source\Platform\PlatformRenderContext.h" />
     <ClInclude Include="source\Platform\PlatformShell.h" />
     <ClInclude Include="source\Platform\PlatformTypes.h" />

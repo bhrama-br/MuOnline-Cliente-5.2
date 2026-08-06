@@ -12,6 +12,7 @@
 #include "Zzzinfomation.h"
 #include "NewUISystem.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/RenderPipeline.h"
 #include "Platform/PlatformShell.h"
 
 int     OpenglWindowX;     
@@ -184,6 +185,8 @@ void SaveScreen()
 		strcat( GrabFileName, lpszFileName);
 	}*/
 
+	// glReadPixels precisa observar tambem os sprites ainda na fila de UI.
+	Platform::FlushLegacyRenderBatch();
 	unsigned char *Buffer = new unsigned char [(int)WindowWidth*(int)WindowHeight*3];
 	glReadPixels(0,0,(int)WindowWidth,(int)WindowHeight,GL_RGB,GL_UNSIGNED_BYTE,Buffer);
 	WriteJpeg(GrabFileName,(int)WindowWidth,(int)WindowHeight,Buffer,100);
@@ -301,6 +304,8 @@ bool TestDepthBuffer(vec3_t Position)
 		x>=(int)OpenglWindowX+OpenglWindowWidth ||
 		y>=(int)OpenglWindowY+OpenglWindowHeight) return false;
 
+	// A leitura de profundidade e uma barreira de ordenacao para a UI pendente.
+	Platform::FlushLegacyRenderBatch();
 	GLfloat key[3];
     glReadPixels(x,y,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,key);
 
@@ -353,6 +358,7 @@ void BindTexture(int tex)
 	{
       	CachTexture = tex;
 		glBindTexture(GL_TEXTURE_2D, nome);
+		Platform::InvalidateLegacyRenderStateCache();
 #if defined(_WIN32)
 		Platform::GetLegacyRenderAdapter().BindTexture(nome);
 #endif
@@ -396,7 +402,7 @@ void EnableDepthTest()
     if(!DepthTestEnable) 
 	{
 		DepthTestEnable = true;
-        glEnable(GL_DEPTH_TEST);
+		SetLegacyDepthTest(true);
 	}
 }
 
@@ -405,7 +411,7 @@ void DisableDepthTest()
     if(DepthTestEnable) 
 	{
 		DepthTestEnable = false;
-        glDisable(GL_DEPTH_TEST);
+		SetLegacyDepthTest(false);
 	}
 }
 
@@ -477,6 +483,7 @@ void DisableAlphaBlend()
 	{
 		AlphaBlendType = 0;
 		glDisable(GL_BLEND);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(0);
 	}
     EnableCullFace();
     EnableDepthMask();
@@ -501,6 +508,7 @@ void EnableAlphaTest(bool DepthMask)
 		AlphaBlendType = 2;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(2);
 	}
     DisableCullFace();
 	if(DepthMask)
@@ -526,6 +534,7 @@ void EnableAlphaBlend()
 		AlphaBlendType = 3;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE,GL_ONE);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(3);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -550,6 +559,7 @@ void EnableAlphaBlendMinus()
 		AlphaBlendType = 4;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ZERO,GL_ONE_MINUS_SRC_COLOR);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(4);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -574,6 +584,7 @@ void EnableAlphaBlend2()
 		AlphaBlendType = 5;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE_MINUS_SRC_COLOR,GL_ONE);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(5);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -598,6 +609,7 @@ void EnableAlphaBlend3()
 		AlphaBlendType = 6;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(6);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -622,6 +634,7 @@ void EnableAlphaBlend4()
 		AlphaBlendType = 7;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE,GL_ONE_MINUS_SRC_COLOR);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(7);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -646,6 +659,7 @@ void EnableLightMap()
 		AlphaBlendType = 1;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ZERO,GL_SRC_COLOR);
+		Platform::GetLegacyRenderAdapter().SetBlendMode(1);
 	}
     EnableCullFace();
     EnableDepthMask();
@@ -710,7 +724,7 @@ void BeginOpengl(int x,int y,int Width,int Height )
 
     SetLegacyAlphaTest(false);
     SetLegacyTexture2D(true);
-    glEnable(GL_DEPTH_TEST);
+    SetLegacyDepthTest(true);
     glEnable(GL_CULL_FACE);
    	glDepthMask(true);
     AlphaTestEnable = false;
@@ -744,6 +758,11 @@ void SetLegacyTexture2D(bool enabled)
     enabled ? glEnable(GL_TEXTURE_2D) : glDisable(GL_TEXTURE_2D);
 #endif
     Platform::GetLegacyRenderAdapter().SetTexture2D(enabled);
+}
+
+void SetLegacyDepthTest(bool enabled)
+{
+    Platform::GetLegacyRenderAdapter().SetDepthTest(enabled);
 }
 
 void SetLegacyAlphaTest(bool enabled)
@@ -1191,11 +1210,21 @@ void BeginSprite()
 {
 	glPushMatrix();
 	glLoadIdentity();
+	// Sprites e particulas ja chegam no espaco da camera. O adapter GLSL precisa
+	// receber a matriz identidade antes de acumular os quads no VBO dinamico.
+	SyncLegacyRenderMatrices();
+	// RenderSprites/RenderParticles preservam a ordem de emissao. O adapter so
+	// junta quads consecutivos com o mesmo estado (textura e blend), portanto
+	// transparencias nunca sao reordenadas.
+	Platform::GetLegacyRenderAdapter().BeginBatch();
 }
 
 void EndSprite()
 {
+	// Envia o buffer dinamico enquanto a matriz de sprites ainda esta ativa.
+	Platform::GetLegacyRenderAdapter().EndBatch();
 	glPopMatrix();
+	SyncLegacyRenderMatrices();
 }
 
 void RenderSprite(int Texture,vec3_t Position,float Width,float Height,vec3_t Light,float Rotation,float u,float v,float uWidth,float vHeight)
@@ -1282,15 +1311,28 @@ void RenderSpriteUV(int Texture,vec3_t Position,float Width,float Height,float (
 	Vector(x+Width, y+Height, z, p[2]);
 	Vector(x-Width, y+Height, z, p[3]);
 
-	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-	renderer.Begin(Platform::LegacyPrimitiveQuads);
+	Platform::RenderVertex vertices[4] = {};
 	for(int i=0;i<4;i++)
 	{
-		renderer.Color4f(Light[i][0],Light[i][1],Light[i][2],Alpha);
-		renderer.TexCoord2f(UV[i][0],UV[i][1]);
-		renderer.Vertex3fv(p[i]);
+		vertices[i].position[0] = p[i][0];
+		vertices[i].position[1] = p[i][1];
+		vertices[i].position[2] = p[i][2];
+		vertices[i].color[0] = Light[i][0];
+		vertices[i].color[1] = Light[i][1];
+		vertices[i].color[2] = Light[i][2];
+		vertices[i].color[3] = Alpha;
+		vertices[i].texCoord[0] = UV[i][0];
+		vertices[i].texCoord[1] = UV[i][1];
 	}
-	renderer.End();
+
+	Platform::RenderCommand command;
+	command.pass = Platform::RenderPassText;
+	command.topology = Platform::RenderTopologyQuads;
+	command.vertexCount = 4;
+	command.material.texture = Platform::Texture(Bitmaps[Texture].TextureNumber);
+	command.material.shader = Platform::RenderShaderTextV1;
+	command.material.transparent = true;
+	Platform::ExecuteRenderCommand(command, vertices);
 }
 
 void RenderNumber(vec3_t Position,int Num,vec3_t Color,float Alpha,float Scale)
@@ -1378,10 +1420,14 @@ void BeginBitmap()
     // fora do enquadramento: a tela fica limpa mesmo com os quads sendo
     // emitidos. No Windows a funcao le a pilha do GL, entao nada muda la.
     SyncLegacyRenderMatrices();
+    Platform::GetLegacyRenderAdapter().BeginBatch();
 }
 
 void EndBitmap()
 {
+	// Termina o lote antes de restaurar as matrizes 3D: todos os sprites usam a
+	// projecao ortografica atual e a ordem de emissao permanece inalterada.
+	Platform::GetLegacyRenderAdapter().EndBatch();
 	glMatrixMode(GL_MODELVIEW);
 	glPopMatrix();
 	glMatrixMode(GL_PROJECTION);
@@ -1537,7 +1583,7 @@ void RenderColor(float x,float y,float Width,float Height,float Alpha,int Flag)
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(false);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
 		if(Alpha > 0.f)
@@ -1592,7 +1638,7 @@ void RenderColorBitmap(int Texture,float x,float y,float Width,float Height,floa
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 
 	for(int i=0;i<4;i++)
 	{
@@ -1639,23 +1685,26 @@ void RenderBitmap(int Texture,float x,float y,float Width,float Height,float u,f
 	TEXCOORD(c[2],u+uWidth,v+vHeight);
 	TEXCOORD(c[1],u       ,v+vHeight);
 
-	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	Platform::RenderVertex vertices[4] = {};
 	for(int i=0;i<4;i++)
 	{
-		if(Alpha > 0.f)
-		{
-			renderer.Color4f(1.f,1.f,1.f,Alpha);
-		}
-		renderer.TexCoord2f(c[i][0],c[i][1]);
-		renderer.Vertex3f(p[i][0], p[i][1], 0.f);
-		if(Alpha > 0.f)
-		{
-			renderer.Color4f(1.f,1.f,1.f,1.f);
-		}
+		vertices[i].position[0] = p[i][0];
+		vertices[i].position[1] = p[i][1];
+		vertices[i].color[0] = vertices[i].color[1] = vertices[i].color[2] = 1.f;
+		vertices[i].color[3] = Alpha > 0.f ? Alpha : 1.f;
+		vertices[i].texCoord[0] = c[i][0];
+		vertices[i].texCoord[1] = c[i][1];
 	}
-	renderer.End();
+
+	Platform::RenderCommand command;
+	command.pass = Platform::RenderPassUi;
+	command.topology = Platform::RenderTopologyQuads;
+	command.vertexCount = 4;
+	command.material.texture = Platform::Texture(Bitmaps[Texture].TextureNumber);
+	command.material.shader = Platform::RenderShaderUiV1;
+	command.material.depthTest = false;
+	command.material.transparent = true;
+	Platform::ExecuteRenderCommand(command, vertices);
 }
 
 void RenderBitmapRotate(int Texture,float x,float y,float Width,float Height,float Rotate,float u,float v,float uWidth,float vHeight)
@@ -1690,7 +1739,7 @@ void RenderBitmapRotate(int Texture,float x,float y,float Width,float Height,flo
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
 		renderer.TexCoord2f(c[i][0],c[i][1]);
@@ -1739,7 +1788,7 @@ void RenderBitRotate(int Texture,float x,float y,float Width,float Height,float 
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
 		renderer.TexCoord2f(c[i][0],c[i][1]);
@@ -1789,7 +1838,7 @@ void RenderPointRotate(int Texture,float ix,float iy,float iWidth,float iHeight,
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(i=0;i<4;i++)
 	{
 		renderer.TexCoord2f(c[i][0],c[i][1]);
@@ -1851,7 +1900,7 @@ void RenderBitmapLocalRotate(int Texture,float x,float y,float Width,float Heigh
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
 		renderer.TexCoord2f(c[i][0],c[i][1]);
@@ -1893,7 +1942,7 @@ void RenderBitmapAlpha(int Texture,float sx,float sy,float Width,float Height)
 			if(x==3&&y==0) Alpha[3] = 0.f;*/
 			
 			Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-			renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+			renderer.Begin(Platform::LegacyPrimitiveQuads);
 			for(int i=0;i<4;i++)
 			{
 				renderer.Color4f(1.f,1.f,1.f,Alpha[i]);
@@ -1928,7 +1977,7 @@ void RenderBitmapUV(int Texture,float x,float y,float Width,float Height,float u
 
 	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 	renderer.SetTexture2D(true);
-	renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
 		renderer.TexCoord2f(c[i][0],c[i][1]);

@@ -68,6 +68,7 @@ namespace
 
     WebInputBackend g_backend;
     std::atomic<bool> g_webChatOpenRequested(false);
+    std::atomic<bool> g_webChatSubmitRequested(false);
     EM_BOOL OnMouse(int eventType, const EmscriptenMouseEvent* event, void*)
     {
         // targetX/targetY, nao canvasX/canvasY: estes ultimos estao deprecados no
@@ -154,17 +155,26 @@ namespace
         // foco -- e o que o Windows faz, porque GetAsyncKeyState e global. Quem separa
         // os dois mundos e o cliente: CInput::IsKeyDown devolve false em modo de edicao.
         const unsigned int virtualDom = CodigoVirtual(event);
-        if (virtualDom != 0) Platform::DefinirTeclaLegada((int)virtualDom, true);
+        const bool textHasFocus = Platform::HaFocoDeTexto();
 
-        // Opening chat must work before a native-like text control has focus.
-        // Queue it for the game loop instead of relying on the browser callback
-        // timing relative to the legacy asynchronous-key scan.
-        if (virtualDom == kVkReturn && !Platform::HaFocoDeTexto())
-            g_webChatOpenRequested = true;
+        // Enter is a one-shot chat action.  Do not also place it in the legacy
+        // asynchronous table: that second route can reopen or close the chat on
+        // a later animation frame.
+        if (virtualDom == kVkReturn)
+        {
+            if (textHasFocus)
+                g_webChatSubmitRequested = true;
+            else
+                g_webChatOpenRequested = true;
+        }
+        else if (virtualDom != 0)
+        {
+            Platform::DefinirTeclaLegada((int)virtualDom, true);
+        }
 
         // Sem campo de texto em foco a tecla nao e do EDIT: deixar o navegador em paz
         // preserva F5, F12 e os atalhos do usuario.
-        if (!Platform::HaFocoDeTexto()) return EM_FALSE;
+        if (!textHasFocus) return EM_FALSE;
 
         const char* nome = event->key;
         // Ctrl+tecla nao vira caractere. O cliente trata Ctrl+C/V/X pelo proprio
@@ -241,5 +251,9 @@ namespace Platform
     bool ConsumeWebChatOpenRequest()
     {
         return g_webChatOpenRequested.exchange(false);
+    }
+    bool ConsumeWebChatSubmitRequest()
+    {
+        return g_webChatSubmitRequested.exchange(false);
     }
 }

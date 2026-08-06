@@ -2,6 +2,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "Platform/LegacyRenderAdapter.h"
 #include "UIManager.h"
 #include "ZzzOpenglUtil.h"
 #include "ZzzBMD.h"
@@ -11862,6 +11863,7 @@ void CreateGuildMark( int nMarkIndex, bool blend )
 	}
 
 	glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
+	Platform::InvalidateLegacyRenderStateCache();
 
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
 }
@@ -11944,6 +11946,7 @@ void CreateCastleMark ( int Type, BYTE* buffer, bool blend )
 		}
 	}
     glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
+    Platform::InvalidateLegacyRenderStateCache();
 
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
 }
@@ -11999,6 +12002,7 @@ void RenderGuildColor(float x,float y,int SizeX,int SizeY,int Index)
 	}
 
 	glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
+	Platform::InvalidateLegacyRenderStateCache();
 
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
     RenderBitmap(BITMAP_GUILD,x,y,(float)SizeX,(float)SizeY);

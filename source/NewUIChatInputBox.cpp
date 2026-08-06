@@ -41,6 +41,7 @@ void SEASON3B::CNewUIChatInputBox::Init()
 	m_posy = 180.f;
 
 	m_bShowMessageElseNormal = false;
+	m_inputController.Reset();
 }
 
 void SEASON3B::CNewUIChatInputBox::LoadImages()
@@ -473,7 +474,10 @@ bool SEASON3B::CNewUIChatInputBox::UpdateKeyEvent()
 		}	
 	}
 
-	if( false == IsVisible() && SEASON3B::IsPress(VK_RETURN) )
+	const ChatInputAction inputAction = m_inputController.Consume(
+		IsVisible(), HaveFocus(), SEASON3B::IsPress(VK_RETURN), SEASON3B::IsPress(VK_ESCAPE));
+
+	if(inputAction == ChatInputAction::Open)
 	{
 		if(gMapManager.InChaosCastle() == true && g_pNewUISystem->IsVisible(SEASON3B::INTERFACE_CHAOSCASTLE_TIME) == false)
 		{
@@ -488,7 +492,7 @@ bool SEASON3B::CNewUIChatInputBox::UpdateKeyEvent()
 		return false;
 	}
 
-	if(IsVisible() && HaveFocus() && SEASON3B::IsPress(VK_RETURN))
+	if(inputAction == ChatInputAction::Submit)
 	{
 		char	szChatText[MAX_CHAT_SIZE+1]	= {'\0'};
 		char	szWhisperID[MAX_ID_SIZE+1]	= {'\0'};		
@@ -628,19 +632,26 @@ bool SEASON3B::CNewUIChatInputBox::UpdateKeyEvent()
 			return false;
 		}
 	}
-	if(g_pNewUISystem->IsVisible(SEASON3B::INTERFACE_CHATINPUTBOX) == true)
+	if(inputAction == ChatInputAction::Cancel)
 	{
-		if(SEASON3B::IsPress(VK_ESCAPE) == true)
-		{
-			g_pNewUISystem->Hide(SEASON3B::INTERFACE_CHATINPUTBOX);
+		g_pNewUISystem->Hide(SEASON3B::INTERFACE_CHATINPUTBOX);
 
-			PlayBuffer(SOUND_CLICK01);
+		PlayBuffer(SOUND_CLICK01);
 
-			return false;
-		}
+		return false;
 	}
 
 	return true;
+}
+
+void SEASON3B::CNewUIChatInputBox::RequestWebOpen()
+{
+	m_inputController.RequestOpen();
+}
+
+void SEASON3B::CNewUIChatInputBox::RequestWebSubmit()
+{
+	m_inputController.RequestSubmit();
 }
 
 bool SEASON3B::CNewUIChatInputBox::Update()

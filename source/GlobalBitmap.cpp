@@ -4,6 +4,7 @@
 
 #include "stdafx.h"
 #include "Platform/LegacyFileAccess.h"
+#include "Platform/LegacyRenderAdapter.h"
 
 #include "GlobalBitmap.h"
 #include "./Utilities/Log/ErrorReport.h"
@@ -685,6 +686,7 @@ bool CGlobalBitmap::OpenJpeg(GLuint uiBitmapIndex, const std::string& filename, 
 		glGenTextures( 1, &(pNewBitmap->TextureNumber));
 
 		glBindTexture(GL_TEXTURE_2D, pNewBitmap->TextureNumber);
+		Platform::InvalidateLegacyRenderStateCache();
 
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, Width, Height, 0, GL_RGB, GL_UNSIGNED_BYTE, pNewBitmap->Buffer);
 
@@ -814,6 +816,7 @@ bool CGlobalBitmap::OpenTga(GLuint uiBitmapIndex, const std::string& filename, G
 	glGenTextures( 1, &(pNewBitmap->TextureNumber));
 
 	glBindTexture(GL_TEXTURE_2D, pNewBitmap->TextureNumber);
+	Platform::InvalidateLegacyRenderStateCache();
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pNewBitmap->Buffer);
 

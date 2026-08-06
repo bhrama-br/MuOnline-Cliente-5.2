@@ -64,6 +64,30 @@ static void DrawLegacyVertexArray(const vec3_t* vertices, const vec4_t* colors, 
     renderer.End();
 }
 
+// Classificacao conservadora por corpo: apenas malhas comprovadamente opacas
+// entram na primeira fila. Alpha-test, scripts e efeitos permanecem na fila
+// transparente, que conserva a ordem original do BMD.
+static bool IsTransparentBodyMesh(const BMD& model, const Mesh_t& mesh, int flags, float alpha, int explicitTexture)
+{
+    const int specialBlendFlags = RENDER_BRIGHT | RENDER_DARK | RENDER_CHROME |
+        RENDER_CHROME2 | RENDER_CHROME3 | RENDER_CHROME4 | RENDER_CHROME5 |
+        RENDER_CHROME6 | RENDER_CHROME7 | RENDER_METAL | RENDER_OIL |
+        RENDER_LIGHTMAP | RENDER_NODEPTH;
+    if (alpha < 0.99f || (flags & specialBlendFlags) != 0 || mesh.NoneBlendMesh || mesh.m_csTScript != NULL)
+        return true;
+
+    const int texture = explicitTexture != -1 ? explicitTexture : model.IndexTexture[mesh.Texture];
+    if (texture == BITMAP_HIDE || texture == BITMAP_SKIN || texture == BITMAP_HAIR || texture == BITMAP_WATER)
+        return true;
+    const BITMAP_t* bitmap = Bitmaps.GetTexture(texture);
+    return bitmap == NULL || bitmap->Components != 3;
+}
+
+static int GetOpaqueBodyMeshMaterialKey(const BMD& model, const Mesh_t& mesh, int explicitTexture)
+{
+    return explicitTexture != -1 ? explicitTexture : model.IndexTexture[mesh.Texture];
+}
+
 unsigned char ShadowBuffer[256 * 256];
 int           ShadowBufferWidth = 256;
 int           ShadowBufferHeight = 256;
@@ -899,6 +923,7 @@ void BMD::BindLightMaps()
             SmoothBitmap(lmp->Width, lmp->Height, lmp->Buffer);
 
             glBindTexture(GL_TEXTURE_2D, i + IndexLightMap);
+            Platform::InvalidateLegacyRenderStateCache();
             glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1910,6 +1935,12 @@ void BMD::RenderBody(int Flag, float Alpha, int BlendMesh, float BlendMeshLight,
 {
     if (NumMeshs == 0) return;
 
+    // Um corpo pode conter varias malhas opacas com o mesmo material. O
+    // adapter acumula apenas triangulos consecutivos com estado identico; uma
+    // troca de textura/blend/depth descarrega o lote, preservando meshes
+    // transparentes na ordem original.
+    Platform::GetLegacyRenderAdapter().BeginBatch();
+
     int iBlendMesh = BlendMesh;
     BeginRender(Alpha);
     if (!LightEnable)
@@ -1919,11 +1950,35 @@ void BMD::RenderBody(int Flag, float Alpha, int BlendMesh, float BlendMeshLight,
         else
             SetLegacyColor4f(BodyLight[0], BodyLight[1], BodyLight[2], Alpha);
     }
-    for (int i = 0; i < NumMeshs; i++)
+    std::vector<int> opaqueMeshes;
+    std::vector<int> transparentMeshes;
+    opaqueMeshes.reserve(NumMeshs);
+    transparentMeshes.reserve(NumMeshs);
+    for (int i = 0; i < NumMeshs; ++i)
     {
-        iBlendMesh = BlendMesh;
+        if (IsTransparentBodyMesh(*this, Meshs[i], Flag, Alpha, Texture))
+            transparentMeshes.push_back(i);
+        else
+            opaqueMeshes.push_back(i);
+    }
 
-        Mesh_t* m = &Meshs[i];
+    // So a fila opaca pode mudar de ordem. A chave e a textura/material ja
+    // resolvida, reduzindo binds sem tocar nos meshes com transparencia.
+    std::sort(opaqueMeshes.begin(), opaqueMeshes.end(), [this, Texture](int left, int right)
+    {
+        return GetOpaqueBodyMeshMaterialKey(*this, Meshs[left], Texture) <
+            GetOpaqueBodyMeshMaterialKey(*this, Meshs[right], Texture);
+    });
+
+    for (int queue = 0; queue < 2; ++queue)
+    {
+        const std::vector<int>& meshQueue = queue == 0 ? opaqueMeshes : transparentMeshes;
+        for (size_t queuedMesh = 0; queuedMesh < meshQueue.size(); ++queuedMesh)
+        {
+            const int i = meshQueue[queuedMesh];
+            iBlendMesh = BlendMesh;
+
+            Mesh_t* m = &Meshs[i];
         if (m->m_csTScript != NULL)
         {
             if (m->m_csTScript->getHiddenMesh() == false && i != HiddenMesh)
@@ -1966,14 +2021,17 @@ void BMD::RenderBody(int Flag, float Alpha, int BlendMesh, float BlendMeshLight,
                 RenderMesh(i, Flag, Alpha, iBlendMesh, BlendMeshLight, BlendMeshTexCoordU, BlendMeshTexCoordV, Texture);
             }
         }
+        }
     }
     EndRender();
+    Platform::GetLegacyRenderAdapter().EndBatch();
 }
 
 void BMD::RenderBodyAlternative(int iRndExtFlag, int iParam, int Flag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int HiddenMesh, int Texture)
 {
     if (NumMeshs == 0) return;
 
+    Platform::GetLegacyRenderAdapter().BeginBatch();
     BeginRender(Alpha);
     if (!LightEnable)
     {
@@ -1982,14 +2040,37 @@ void BMD::RenderBodyAlternative(int iRndExtFlag, int iParam, int Flag, float Alp
         else
             SetLegacyColor4f(BodyLight[0], BodyLight[1], BodyLight[2], Alpha);
     }
-    for (int i = 0; i < NumMeshs; i++)
+    std::vector<int> opaqueMeshes;
+    std::vector<int> transparentMeshes;
+    opaqueMeshes.reserve(NumMeshs);
+    transparentMeshes.reserve(NumMeshs);
+    for (int i = 0; i < NumMeshs; ++i)
     {
-        if (i != HiddenMesh)
+        if (IsTransparentBodyMesh(*this, Meshs[i], Flag, Alpha, Texture))
+            transparentMeshes.push_back(i);
+        else
+            opaqueMeshes.push_back(i);
+    }
+    std::sort(opaqueMeshes.begin(), opaqueMeshes.end(), [this, Texture](int left, int right)
+    {
+        return GetOpaqueBodyMeshMaterialKey(*this, Meshs[left], Texture) <
+            GetOpaqueBodyMeshMaterialKey(*this, Meshs[right], Texture);
+    });
+
+    for (int queue = 0; queue < 2; ++queue)
+    {
+        const std::vector<int>& meshQueue = queue == 0 ? opaqueMeshes : transparentMeshes;
+        for (size_t queuedMesh = 0; queuedMesh < meshQueue.size(); ++queuedMesh)
         {
-            RenderMeshAlternative(iRndExtFlag, iParam, i, Flag, Alpha, BlendMesh, BlendMeshLight, BlendMeshTexCoordU, BlendMeshTexCoordV, Texture);
+            const int i = meshQueue[queuedMesh];
+            if (i != HiddenMesh)
+            {
+                RenderMeshAlternative(iRndExtFlag, iParam, i, Flag, Alpha, BlendMesh, BlendMeshLight, BlendMeshTexCoordU, BlendMeshTexCoordV, Texture);
+            }
         }
     }
     EndRender();
+    Platform::GetLegacyRenderAdapter().EndBatch();
 }
 
 void BMD::RenderMeshTranslate(int i, int RenderFlag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int MeshTexture)
@@ -2221,6 +2302,7 @@ void BMD::RenderBodyTranslate(int Flag, float Alpha, int BlendMesh, float BlendM
 {
     if (NumMeshs == 0) return;
 
+    Platform::GetLegacyRenderAdapter().BeginBatch();
     BeginRender(Alpha);
     if (!LightEnable)
     {
@@ -2229,14 +2311,37 @@ void BMD::RenderBodyTranslate(int Flag, float Alpha, int BlendMesh, float BlendM
         else
             SetLegacyColor4f(BodyLight[0], BodyLight[1], BodyLight[2], Alpha);
     }
-    for (int i = 0; i < NumMeshs; i++)
+    std::vector<int> opaqueMeshes;
+    std::vector<int> transparentMeshes;
+    opaqueMeshes.reserve(NumMeshs);
+    transparentMeshes.reserve(NumMeshs);
+    for (int i = 0; i < NumMeshs; ++i)
     {
-        if (i != HiddenMesh)
+        if (IsTransparentBodyMesh(*this, Meshs[i], Flag, Alpha, Texture))
+            transparentMeshes.push_back(i);
+        else
+            opaqueMeshes.push_back(i);
+    }
+    std::sort(opaqueMeshes.begin(), opaqueMeshes.end(), [this, Texture](int left, int right)
+    {
+        return GetOpaqueBodyMeshMaterialKey(*this, Meshs[left], Texture) <
+            GetOpaqueBodyMeshMaterialKey(*this, Meshs[right], Texture);
+    });
+
+    for (int queue = 0; queue < 2; ++queue)
+    {
+        const std::vector<int>& meshQueue = queue == 0 ? opaqueMeshes : transparentMeshes;
+        for (size_t queuedMesh = 0; queuedMesh < meshQueue.size(); ++queuedMesh)
         {
-            RenderMeshTranslate(i, Flag, Alpha, BlendMesh, BlendMeshLight, BlendMeshTexCoordU, BlendMeshTexCoordV, Texture);
+            const int i = meshQueue[queuedMesh];
+            if (i != HiddenMesh)
+            {
+                RenderMeshTranslate(i, Flag, Alpha, BlendMesh, BlendMeshLight, BlendMeshTexCoordU, BlendMeshTexCoordV, Texture);
+            }
         }
     }
     EndRender();
+    Platform::GetLegacyRenderAdapter().EndBatch();
 }
 
 __forceinline void CalcShadowPosition(vec3_t* position, const vec3_t origin, const float sx, const float sy)

@@ -1795,23 +1795,14 @@ bool SEASON3B::CNewUISystem::Update()
 	}
 
 #if defined(__EMSCRIPTEN__)
-	// On the desktop the hidden chat widget still receives Enter through the
-	// native focus chain.  A browser has no equivalent main HWND, so open it at
-	// the system level while no text control owns focus.  Once visible, the
-	// original chat widget continues to handle typing and message submission.
-	const bool webChatOpenRequested = Platform::ConsumeWebChatOpenRequest();
-	if (m_pNewChatInputBox != NULL
-		&& !IsVisible(SEASON3B::INTERFACE_CHATINPUTBOX)
-		&& (webChatOpenRequested
-			|| (GetFocus() == g_hWnd && SEASON3B::IsPress(VK_RETURN))))
+	// Browser callbacks only translate DOM events.  The shared chat controller
+	// owns the actual UI transition and submission, exactly as on the desktop.
+	if (m_pNewChatInputBox != NULL)
 	{
-		if (!gMapManager.InChaosCastle()
-			|| !IsVisible(SEASON3B::INTERFACE_CHAOSCASTLE_TIME))
-		{
-			Show(SEASON3B::INTERFACE_CHATINPUTBOX);
-			RestoreIMEStatus();
-			return true;
-		}
+		if (Platform::ConsumeWebChatOpenRequest())
+			m_pNewChatInputBox->RequestWebOpen();
+		if (Platform::ConsumeWebChatSubmitRequest())
+			m_pNewChatInputBox->RequestWebSubmit();
 	}
 #endif
 

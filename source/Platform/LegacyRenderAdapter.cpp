@@ -65,6 +65,31 @@ void Platform::InvalidateLegacyRenderResources()
         g_LegacyRenderAdapter->InvalidateGraphicsResources();
 }
 
+void Platform::FlushLegacyRenderBatch()
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->FlushBatch();
+}
+
+void Platform::ResetLegacyRenderFrameStats()
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->ResetFrameStats();
+}
+
+Platform::LegacyRenderFrameStats Platform::GetLegacyRenderFrameStats()
+{
+    return (g_LegacyRenderAdapter != NULL)
+        ? g_LegacyRenderAdapter->GetFrameStats()
+        : LegacyRenderFrameStats();
+}
+
+void Platform::InvalidateLegacyRenderStateCache()
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->InvalidateStateCache();
+}
+
 Platform::ILegacyRenderAdapter& Platform::GetLegacyRenderAdapter() { return *g_LegacyRenderAdapter; }
 void Platform::SetLegacyRenderAdapter(ILegacyRenderAdapter* adapter)
 {

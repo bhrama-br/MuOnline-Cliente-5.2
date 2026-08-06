@@ -3,7 +3,10 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>MU Legacy WebGL2</title></head>
 <body style="margin:0;background:#000;overflow:hidden"><canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" onmousedown="this.focus()" style="width:100vw;height:100vh"></canvas>
 <script>
-var Module = { canvas: document.getElementById('canvas') };
+var Module = {
+  canvas: document.getElementById('canvas'),
+  locateFile: function(path, prefix) { return prefix + path + '?v=chat-controller-20260806-r2'; }
+};
 </script>
 {{{ SCRIPT }}}
 </body>
