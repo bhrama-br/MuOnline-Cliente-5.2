@@ -8,13 +8,26 @@ namespace Platform
     struct LegacyRenderFrameStats
     {
         LegacyRenderFrameStats()
-            : drawCalls(0), vertices(0), vertexUploadBytes(0), textureChanges(0),
-              programChanges(0), depthStateChanges(0), alphaTestChanges(0), fogChanges(0), blendStateChanges(0) {}
+            : drawCalls(0), vertices(0), vertexUploadBytes(0), bufferDataCalls(0), bufferSubDataCalls(0), batchFlushes(0),
+              textureUploads(0), textureUploadBytes(0), textureChanges(0), matrixFlushes(0), textureFlushes(0), blendFlushes(0),
+              depthFlushes(0), alphaFlushes(0), fogFlushes(0), programChanges(0), depthStateChanges(0), alphaTestChanges(0),
+              fogChanges(0), blendStateChanges(0) {}
 
         unsigned long long drawCalls;
         unsigned long long vertices;
         unsigned long long vertexUploadBytes;
+        unsigned long long bufferDataCalls;
+        unsigned long long bufferSubDataCalls;
+        unsigned long long batchFlushes;
+        unsigned long long textureUploads;
+        unsigned long long textureUploadBytes;
         unsigned long long textureChanges;
+        unsigned long long matrixFlushes;
+        unsigned long long textureFlushes;
+        unsigned long long blendFlushes;
+        unsigned long long depthFlushes;
+        unsigned long long alphaFlushes;
+        unsigned long long fogFlushes;
         unsigned long long programChanges;
         unsigned long long depthStateChanges;
         unsigned long long alphaTestChanges;
@@ -63,6 +76,7 @@ namespace Platform
         virtual void FlushBatch() {}
         virtual void ResetFrameStats() {}
         virtual LegacyRenderFrameStats GetFrameStats() const { return LegacyRenderFrameStats(); }
+        virtual void RecordTextureUpload(unsigned long long bytes) { (void)bytes; }
         // Deve ser chamado por codigo que altera estado GL diretamente, antes
         // de devolver o controle ao adaptador.
         virtual void InvalidateStateCache() {}
@@ -75,6 +89,7 @@ namespace Platform
     ILegacyRenderAdapter& GetLegacyRenderAdapter();
     void SetLegacyRenderAdapter(ILegacyRenderAdapter* adapter);
     void EnableGlslLegacyBackend(bool enabled);
+    bool IsGlslLegacyBackendEnabled();
 
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();
@@ -82,6 +97,7 @@ namespace Platform
     void FlushLegacyRenderBatch();
     void ResetLegacyRenderFrameStats();
     LegacyRenderFrameStats GetLegacyRenderFrameStats();
+    void RecordLegacyTextureUpload(unsigned long long bytes);
     void InvalidateLegacyRenderStateCache();
 
     // Diagnostico do backend GLSL. Sem um logger registrado, falhas de

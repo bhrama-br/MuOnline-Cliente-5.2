@@ -4,22 +4,28 @@
 
 namespace
 {
+    static Platform::RenderQueue g_opaqueWorldQueue;
+    static Platform::OpenGL33RenderBackend g_opaqueWorldBackend;
+    static bool g_opaqueWorldQueueActive = false;
+
     static bool IsOpaqueBefore(const Platform::RenderCommand& left, const Platform::RenderCommand& right)
     {
         if (left.pass != right.pass) return left.pass < right.pass;
         if (left.material.transparent != right.material.transparent)
             return !left.material.transparent;
 
-        // Transparencias nao podem ser reordenadas por material. A fila aceita
-        // a profundidade calculada pelo chamador e mantem a emissao como empate.
+        // Transparencias nao podem ser reordenadas: o cliente legado depende
+        // da ordem de emissao para compor blend, mesmo quando a profundidade
+        // calculada sugere outra ordem.
         if (left.material.transparent)
-        {
-            if (left.depth != right.depth) return left.depth > right.depth;
             return left.sequence < right.sequence;
-        }
 
         if (left.material.shader != right.material.shader) return left.material.shader < right.material.shader;
         if (left.material.blendMode != right.material.blendMode) return left.material.blendMode < right.material.blendMode;
+        if (left.material.depthTest != right.material.depthTest) return left.material.depthTest < right.material.depthTest;
+        if (left.material.alphaTest != right.material.alphaTest) return left.material.alphaTest < right.material.alphaTest;
+        if (left.material.alphaReference != right.material.alphaReference)
+            return left.material.alphaReference < right.material.alphaReference;
         if (left.material.texture.id != right.material.texture.id) return left.material.texture.id < right.material.texture.id;
         return left.sequence < right.sequence;
     }
@@ -53,6 +59,10 @@ void Platform::RenderQueue::Submit(const RenderCommand& source, const RenderVert
         return;
 
     RenderCommand command = source;
+    // Um material que usa blend nao e seguro para a ordenacao de opacos. Isto
+    // protege migracoes graduais que ainda nao tenham marcado transparent.
+    if (command.material.blendMode != 0)
+        command.material.transparent = true;
     command.firstVertex = m_vertices.size();
     command.vertexCount = vertexCount;
     command.sequence = m_nextSequence++;
@@ -124,4 +134,40 @@ void Platform::ExecuteRenderCommand(const RenderCommand& command, const RenderVe
 {
     static OpenGL33RenderBackend backend;
     backend.Draw(command, vertices);
+}
+
+bool Platform::BeginOpaqueWorldRenderQueue()
+{
+    if (!IsGlslLegacyBackendEnabled())
+        return false;
+    g_opaqueWorldQueue.BeginFrame();
+    g_opaqueWorldQueueActive = true;
+    return true;
+}
+
+bool Platform::IsOpaqueWorldRenderQueueActive()
+{
+    return g_opaqueWorldQueueActive;
+}
+
+void Platform::SubmitOpaqueWorldRenderCommand(const RenderCommand& command, const RenderVertex* vertices, size_t vertexCount)
+{
+    if (g_opaqueWorldQueueActive)
+        g_opaqueWorldQueue.Submit(command, vertices, vertexCount);
+}
+
+void Platform::FlushOpaqueWorldRenderQueue()
+{
+    if (!g_opaqueWorldQueueActive)
+        return;
+    g_opaqueWorldQueue.Execute(g_opaqueWorldBackend);
+    g_opaqueWorldQueue.BeginFrame();
+}
+
+void Platform::ExecuteOpaqueWorldRenderQueue()
+{
+    if (!g_opaqueWorldQueueActive)
+        return;
+    FlushOpaqueWorldRenderQueue();
+    g_opaqueWorldQueueActive = false;
 }

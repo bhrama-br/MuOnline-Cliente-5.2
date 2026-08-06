@@ -117,6 +117,7 @@ bool SEASON3B::CNewUI3DCamera::Render()
 	}
 
 	EndBitmap();
+	PushLegacyRenderMatrixSnapshot();
 	glMatrixMode(GL_PROJECTION);
     glPushMatrix();
     glLoadIdentity();
@@ -125,11 +126,9 @@ bool SEASON3B::CNewUI3DCamera::Render()
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
-	GetOpenGLMatrix(CameraMatrix);
-	// The WebGL legacy adapter keeps its own matrices.  Item previews change
-	// the fixed-function matrix stack, so publish this UI camera before any
-	// BMD mesh is submitted.
-	SyncLegacyRenderMatrices();
+	// A mesma leitura alimenta CameraMatrix e o adapter GLSL; evita consultar
+	// a modelview duas vezes antes de desenhar a previa do item.
+	SyncLegacyRenderMatricesAndCamera(CameraMatrix);
     EnableDepthTest();
     EnableDepthMask();
 	glClear(GL_DEPTH_BUFFER_BIT);
@@ -148,9 +147,9 @@ bool SEASON3B::CNewUI3DCamera::Render()
 	glPopMatrix();
 	glMatrixMode(GL_PROJECTION);
 	glPopMatrix();
-	// Restore the world/UI matrices in the adapter as well as in the legacy
-	// matrix stack before the following 2D draw calls.
-	SyncLegacyRenderMatrices();
+	// A pilha GL ja foi restaurada pelo pop; no GLSL o snapshot evita reler as
+	// matrizes do driver antes de voltar aos elementos 2D.
+	PopLegacyRenderMatrixSnapshot();
 	BeginBitmap();
 
 	while(!m_deque2DEffects.empty())

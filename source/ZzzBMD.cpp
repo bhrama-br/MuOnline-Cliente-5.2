@@ -5,6 +5,7 @@
 #include "Platform/LegacyFileAccess.h"
 #include "ZzzOpenglUtil.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/RenderPipeline.h"
 #include "ZzzInfomation.h"
 #include "ZzzBMD.h"
 #include "ZzzObject.h"
@@ -1057,6 +1058,22 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
 
     const auto texture = Bitmaps.GetTexture(textureIndex);
 
+    // Primeiro recorte da migracao para a fila global: somente a malha BMD
+    // sem blend, alpha-test, animacao de UV ou script. Todo o resto descarrega
+    // o trecho pendente antes de continuar pelo caminho legado.
+    const bool queueOpaqueWorldMesh = Platform::IsOpaqueWorldRenderQueueActive()
+        && renderFlags == RENDER_TEXTURE
+        && alpha >= 0.99f
+        && blendMeshIndex == -1
+        && blendMeshTextureCoordU == 0.f
+        && blendMeshTextureCoordV == 0.f
+        && m->m_csTScript == NULL
+        && !m->NoneBlendMesh
+        && texture != NULL
+        && texture->Components == 3;
+    if (!queueOpaqueWorldMesh)
+        Platform::FlushOpaqueWorldRenderQueue();
+
     bool EnableWave = false;
     int streamMesh = static_cast<u_char>(this->StreamMesh);
     if (m->m_csTScript != nullptr)
@@ -1438,9 +1455,52 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     }
 
 
-    // enableColor=false preserva a cor corrente definida pelo chamador, como fazia
-    // o GL_COLOR_ARRAY desabilitado.
-    DrawLegacyVertexArray(vertices, enableColor ? colors : NULL, texCoords, m->NumTriangles * 3);
+    if (queueOpaqueWorldMesh)
+    {
+        const int vertexCount = m->NumTriangles * 3;
+        std::vector<Platform::RenderVertex> queueVertices(vertexCount);
+        for (int index = 0; index < vertexCount; ++index)
+        {
+            Platform::RenderVertex& vertex = queueVertices[index];
+            vertex.position[0] = vertices[index][0];
+            vertex.position[1] = vertices[index][1];
+            vertex.position[2] = vertices[index][2];
+            if (enableColor)
+            {
+                vertex.color[0] = colors[index][0];
+                vertex.color[1] = colors[index][1];
+                vertex.color[2] = colors[index][2];
+                vertex.color[3] = colors[index][3];
+            }
+            else
+            {
+                // A rota opaca sempre usa iluminacao por vertice; manter esta
+                // cor evita depender da cor corrente quando a fila for executada.
+                vertex.color[0] = BodyLight[0];
+                vertex.color[1] = BodyLight[1];
+                vertex.color[2] = BodyLight[2];
+                vertex.color[3] = alpha;
+            }
+            vertex.texCoord[0] = texCoords[index][0];
+            vertex.texCoord[1] = texCoords[index][1];
+            vertex.normal[0] = 0.f;
+            vertex.normal[1] = 0.f;
+            vertex.normal[2] = 1.f;
+        }
+
+        Platform::RenderCommand command;
+        command.pass = Platform::RenderPassStaticObjects;
+        command.material.shader = Platform::RenderShaderLegacyCompatV1;
+        command.material.texture = Platform::Texture(texture->TextureNumber);
+        command.material.depthTest = true;
+        Platform::SubmitOpaqueWorldRenderCommand(command, &queueVertices[0], queueVertices.size());
+    }
+    else
+    {
+        // enableColor=false preserva a cor corrente definida pelo chamador, como fazia
+        // o GL_COLOR_ARRAY desabilitado.
+        DrawLegacyVertexArray(vertices, enableColor ? colors : NULL, texCoords, m->NumTriangles * 3);
+    }
 }
 
 void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFlag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int MeshTexture)
@@ -1458,6 +1518,20 @@ void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFl
         Texture = MeshTexture;
 
     BITMAP_t* pBitmap = Bitmaps.GetTexture(Texture);
+
+    const bool queueOpaqueAlternativeMesh = Platform::IsOpaqueWorldRenderQueueActive()
+        && iRndExtFlag == 0
+        && RenderFlag == RENDER_TEXTURE
+        && Alpha >= 0.99f
+        && BlendMesh == -1
+        && BlendMeshTexCoordU == 0.f
+        && BlendMeshTexCoordV == 0.f
+        && m->m_csTScript == NULL
+        && !m->NoneBlendMesh
+        && pBitmap != NULL
+        && pBitmap->Components == 3;
+    if (!queueOpaqueAlternativeMesh)
+        Platform::FlushOpaqueWorldRenderQueue();
 
     bool EnableWave = false;
     int streamMesh = StreamMesh;
@@ -1717,59 +1791,106 @@ void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFl
 
     // ver 1.0 (triangle)
     Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-    renderer.Begin(Platform::LegacyPrimitiveTriangles);
+    std::vector<Platform::RenderVertex> queueVertices;
+    if (queueOpaqueAlternativeMesh)
+        queueVertices.reserve(m->NumTriangles * 3);
+    else
+        renderer.Begin(Platform::LegacyPrimitiveTriangles);
     for (int j = 0; j < m->NumTriangles; j++)
     {
         Triangle_t* tp = &m->Triangles[j];
         for (int k = 0; k < tp->Polygon; k++)
         {
             int vi = tp->VertexIndex[k];
+            float textureU = 0.f;
+            float textureV = 0.f;
+            float colorR = BodyLight[0];
+            float colorG = BodyLight[1];
+            float colorB = BodyLight[2];
+            float colorA = Alpha >= 0.99f ? 1.f : Alpha;
             switch (Render)
             {
             case RENDER_TEXTURE:
             {
                 TexCoord_t* texp = &m->TexCoords[tp->TexCoordIndex[k]];
                 if (EnableWave)
-                    renderer.TexCoord2f(texp->TexCoordU + BlendMeshTexCoordU, texp->TexCoordV + BlendMeshTexCoordV);
+                {
+                    textureU = texp->TexCoordU + BlendMeshTexCoordU;
+                    textureV = texp->TexCoordV + BlendMeshTexCoordV;
+                }
                 else
-                    renderer.TexCoord2f(texp->TexCoordU, texp->TexCoordV);
+                {
+                    textureU = texp->TexCoordU;
+                    textureV = texp->TexCoordV;
+                }
                 if (EnableLight)
                 {
                     int ni = tp->NormalIndex[k];
                     // glColor3fv implica alpha 1.0 no caminho Alpha >= 0.99f.
                     float* Light = LightTransform[i][ni];
-                    renderer.Color4f(Light[0], Light[1], Light[2], Alpha >= 0.99f ? 1.f : Alpha);
+                    colorR = Light[0]; colorG = Light[1]; colorB = Light[2];
                 }
                 break;
             }
             case RENDER_CHROME:
             {
-                renderer.Color4f(BodyLight[0], BodyLight[1], BodyLight[2], Alpha >= 0.99f ? 1.f : Alpha);
                 int ni = tp->NormalIndex[k];
-                renderer.TexCoord2f(g_chrome[ni][0], g_chrome[ni][1]);
+                textureU = g_chrome[ni][0];
+                textureV = g_chrome[ni][1];
                 break;
             }
             }
+            vec3_t position;
             if ((iRndExtFlag & RNDEXT_WAVE))
             {
-                float vPos[3];
                 float fParam = (float)((int)WorldTime + vi * 931) * 0.007f;
                 float fSin = sinf(fParam);
                 int ni = tp->NormalIndex[k];
                 float* Normal = NormalTransform[i][ni];
                 for (int iCoord = 0; iCoord < 3; ++iCoord)
                 {
-                    vPos[iCoord] = VertexTransform[i][vi][iCoord] + Normal[iCoord] * fSin * 28.0f;
+                    position[iCoord] = VertexTransform[i][vi][iCoord] + Normal[iCoord] * fSin * 28.0f;
                 }
-                renderer.Vertex3fv(vPos);
             }
             else
             {
-                renderer.Vertex3fv(VertexTransform[i][vi]);
+                VectorCopy(VertexTransform[i][vi], position);
+            }
+
+            if (queueOpaqueAlternativeMesh)
+            {
+                Platform::RenderVertex vertex;
+                vertex.position[0] = position[0]; vertex.position[1] = position[1]; vertex.position[2] = position[2];
+                vertex.color[0] = colorR; vertex.color[1] = colorG; vertex.color[2] = colorB; vertex.color[3] = colorA;
+                vertex.texCoord[0] = textureU; vertex.texCoord[1] = textureV;
+                vertex.normal[0] = 0.f; vertex.normal[1] = 0.f; vertex.normal[2] = 1.f;
+                queueVertices.push_back(vertex);
+            }
+            else
+            {
+                // No caminho legado sem iluminacao, a cor corrente pertence ao
+                // chamador; nao a sobrescrever por vertice preserva o contrato
+                // original do RenderMeshAlternative.
+                if (Render != RENDER_TEXTURE || EnableLight)
+                    renderer.Color4f(colorR, colorG, colorB, colorA);
+                renderer.TexCoord2f(textureU, textureV);
+                renderer.Vertex3fv(position);
             }
         }
     }
-    renderer.End();
+    if (queueOpaqueAlternativeMesh)
+    {
+        Platform::RenderCommand command;
+        command.pass = Platform::RenderPassStaticObjects;
+        command.material.shader = Platform::RenderShaderLegacyCompatV1;
+        command.material.texture = Platform::Texture(pBitmap->TextureNumber);
+        command.material.depthTest = true;
+        Platform::SubmitOpaqueWorldRenderCommand(command, &queueVertices[0], queueVertices.size());
+    }
+    else
+    {
+        renderer.End();
+    }
 }
 
 void BMD::RenderMeshEffect(int i, int iType, int iSubType, vec3_t Angle, VOID* obj)
@@ -2097,6 +2218,63 @@ void BMD::RenderMeshTranslate(int i, int RenderFlag, float Alpha, int BlendMesh,
         Texture = MeshTexture;
 
     BITMAP_t* pBitmap = Bitmaps.GetTexture(Texture);
+
+    const bool queueOpaqueTranslateMesh = Platform::IsOpaqueWorldRenderQueueActive()
+        && RenderFlag == RENDER_TEXTURE
+        && Alpha >= 0.99f
+        && BlendMesh == -1
+        && BlendMeshTexCoordU == 0.f
+        && BlendMeshTexCoordV == 0.f
+        && i != StreamMesh
+        && m->m_csTScript == NULL
+        && !m->NoneBlendMesh
+        && pBitmap != NULL
+        && pBitmap->Components == 3;
+    if (queueOpaqueTranslateMesh)
+    {
+        std::vector<Platform::RenderVertex> queueVertices;
+        queueVertices.reserve(m->NumTriangles * 3);
+        for (int triangleIndex = 0; triangleIndex < m->NumTriangles; ++triangleIndex)
+        {
+            const Triangle_t* triangle = &m->Triangles[triangleIndex];
+            for (int corner = 0; corner < triangle->Polygon; ++corner)
+            {
+                const int vertexIndex = triangle->VertexIndex[corner];
+                const int normalIndex = triangle->NormalIndex[corner];
+                const TexCoord_t* texCoord = &m->TexCoords[triangle->TexCoordIndex[corner]];
+                Platform::RenderVertex vertex;
+                vertex.position[0] = VertexTransform[i][vertexIndex][0] + BodyOrigin[0];
+                vertex.position[1] = VertexTransform[i][vertexIndex][1] + BodyOrigin[1];
+                vertex.position[2] = VertexTransform[i][vertexIndex][2] + BodyOrigin[2];
+                if (LightEnable)
+                {
+                    vertex.color[0] = BodyLight[0] * IntensityTransform[i][normalIndex];
+                    vertex.color[1] = BodyLight[1] * IntensityTransform[i][normalIndex];
+                    vertex.color[2] = BodyLight[2] * IntensityTransform[i][normalIndex];
+                }
+                else
+                {
+                    vertex.color[0] = BodyLight[0];
+                    vertex.color[1] = BodyLight[1];
+                    vertex.color[2] = BodyLight[2];
+                }
+                vertex.color[3] = 1.f;
+                vertex.texCoord[0] = texCoord->TexCoordU;
+                vertex.texCoord[1] = texCoord->TexCoordV;
+                vertex.normal[0] = 0.f; vertex.normal[1] = 0.f; vertex.normal[2] = 1.f;
+                queueVertices.push_back(vertex);
+            }
+        }
+
+        Platform::RenderCommand command;
+        command.pass = Platform::RenderPassStaticObjects;
+        command.material.shader = Platform::RenderShaderLegacyCompatV1;
+        command.material.texture = Platform::Texture(pBitmap->TextureNumber);
+        command.material.depthTest = true;
+        Platform::SubmitOpaqueWorldRenderCommand(command, &queueVertices[0], queueVertices.size());
+        return;
+    }
+    Platform::FlushOpaqueWorldRenderQueue();
 
     bool EnableWave = false;
     int streamMesh = StreamMesh;
@@ -2480,6 +2658,10 @@ void BMD::RenderBodyShadow(const int blendMesh, const int hiddenMesh, const int 
         return;
     }
 
+    // Stencil modifica o framebuffer: nenhum opaco pendente pode atravessar
+    // esta fronteira e ser desenhado depois da mascara.
+    Platform::FlushOpaqueWorldRenderQueue();
+
     EnableAlphaTest(false);
 
     SetLegacyColor4f(0.0f, 0.0f, 0.0f, 0.5f); // 50% opacity for shadows
@@ -2489,8 +2671,8 @@ void BMD::RenderBodyShadow(const int blendMesh, const int hiddenMesh, const int 
     BeginRender(1.f);
 
     // enable stencil and continue draw
-    glEnable(GL_STENCIL_TEST);
-    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    EnableStencilTest();
+    SetLegacyStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 
     int startMesh = 0;
     int endMesh = NumMeshs;
@@ -2520,7 +2702,7 @@ void BMD::RenderBodyShadow(const int blendMesh, const int hiddenMesh, const int 
     EndRender();
     EnableDepthMask();
 
-    glDisable(GL_STENCIL_TEST);
+    DisableStencilTest();
 }
 
 void BMD::RenderObjectBoundingBox()
@@ -2587,7 +2769,7 @@ void BMD::RenderObjectBoundingBox()
 void BMD::RenderBone(float(*BoneMatrix)[3][4])
 {
     DisableTexture();
-    glDepthFunc(GL_ALWAYS);
+    SetLegacyDepthFunc(GL_ALWAYS);
     Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
     renderer.SetTexture2D(false);
     renderer.Color4f(0.8f, 0.8f, 0.2f, 1.f);
@@ -2628,7 +2810,7 @@ void BMD::RenderBone(float(*BoneMatrix)[3][4])
             }
         }
     }
-    glDepthFunc(GL_LEQUAL);
+    SetLegacyDepthFunc(GL_LEQUAL);
 }
 
 void BlurShadow()

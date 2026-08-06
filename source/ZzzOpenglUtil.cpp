@@ -186,6 +186,7 @@ void SaveScreen()
 	}*/
 
 	// glReadPixels precisa observar tambem os sprites ainda na fila de UI.
+	Platform::FlushOpaqueWorldRenderQueue();
 	Platform::FlushLegacyRenderBatch();
 	unsigned char *Buffer = new unsigned char [(int)WindowWidth*(int)WindowHeight*3];
 	glReadPixels(0,0,(int)WindowWidth,(int)WindowHeight,GL_RGB,GL_UNSIGNED_BYTE,Buffer);
@@ -202,6 +203,27 @@ float PerspectiveY;
 int   ScreenCenterX;
 int   ScreenCenterY;
 int   ScreenCenterYFlip;
+
+// Ultima matriz 3D publicada no adapter. A UI instala uma matriz ortografica
+// temporaria; depois do pop ela pode restaurar esta copia sem consultar o GL.
+static float g_legacyProjection3D[16];
+static float g_legacyModelView3D[16];
+static bool g_legacy3DMatricesKnown = false;
+static float g_legacyMatrixSnapshotProjection[8][16];
+static float g_legacyMatrixSnapshotModelView[8][16];
+static bool g_legacyMatrixSnapshotValid[8] = { false };
+static int g_legacyMatrixSnapshotDepth = 0;
+static float g_spriteProjectionStack[8][16];
+static float g_spriteModelViewStack[8][16];
+static bool g_spriteMatrixSaved[8] = { false };
+static int g_spriteMatrixDepth = 0;
+
+static void RememberLegacy3DMatrices(const float* projection, const float* modelView)
+{
+	memcpy(g_legacyProjection3D, projection, sizeof(g_legacyProjection3D));
+	memcpy(g_legacyModelView3D, modelView, sizeof(g_legacyModelView3D));
+	g_legacy3DMatricesKnown = true;
+}
 
 void GetOpenGLMatrix(float Matrix[3][4])
 {
@@ -221,6 +243,30 @@ void GetOpenGLMatrix(float Matrix[3][4])
 			Matrix[i][j] = OpenGLMatrix[j*4+i];
 		}
 	}
+}
+
+// BeginOpengl precisa tanto da matriz para CameraMatrix quanto para o adapter
+// GLSL. No Windows ambas vinham de glGetFloatv separadamente; fazer a copia a
+// partir da mesma leitura evita uma consulta sincrona extra ao driver por passe.
+void SyncLegacyRenderMatricesAndCamera(float cameraMatrix[3][4])
+{
+#ifdef _WIN32
+	float projection[16];
+	float modelView[16];
+	glGetFloatv(GL_PROJECTION_MATRIX, projection);
+	glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+	Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
+	RememberLegacy3DMatrices(projection, modelView);
+
+	for (int i = 0; i < 3; ++i)
+	{
+		for (int j = 0; j < 4; ++j)
+			cameraMatrix[i][j] = modelView[j * 4 + i];
+	}
+#else
+	GetOpenGLMatrix(cameraMatrix);
+	Platform::LegacyApplyMatricesToAdapter();
+#endif
 }
 
 void gluPerspective2(float Fov,float Aspect,float ZNear,float ZFar)
@@ -306,6 +352,7 @@ bool TestDepthBuffer(vec3_t Position)
 
 	// A leitura de profundidade e uma barreira de ordenacao para a UI pendente.
 	Platform::FlushLegacyRenderBatch();
+	Platform::FlushOpaqueWorldRenderQueue();
 	GLfloat key[3];
     glReadPixels(x,y,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,key);
 
@@ -325,6 +372,17 @@ bool CullFaceEnable;
 bool DepthMaskEnable;
 bool AlphaTestEnable;
 int  AlphaBlendType;
+static bool StencilTestEnable = false;
+static bool StencilFuncKnown = false;
+static unsigned int StencilFunction;
+static int StencilReference;
+static unsigned int StencilMask;
+static bool StencilOpKnown = false;
+static unsigned int StencilFail;
+static unsigned int StencilDepthFail;
+static unsigned int StencilDepthPass;
+static bool DepthFuncKnown = false;
+static unsigned int DepthFunction;
 
 void BindTexture(int tex)
 {
@@ -345,6 +403,13 @@ void BindTexture(int tex)
 		? Bitmaps[tex].TextureNumber
 		: static_cast<unsigned int>(-1 * tex);
 
+	if (Platform::IsGlslLegacyBackendEnabled())
+	{
+		Platform::GetLegacyRenderAdapter().BindTexture(nome);
+		CachTexture = tex;
+		return;
+	}
+
 
 #if !defined(_WIN32)
 	// Só fora do Windows. No PC o adapter emite um glBindTexture de verdade,
@@ -356,6 +421,10 @@ void BindTexture(int tex)
 
 	if(CachTexture != tex)
 	{
+		// A textura do lote anterior precisa chegar ao driver antes de trocar o
+		// binding direto. Sem esta barreira, o adaptador descarregava os quads
+		// pendentes ja com a textura do proximo botao/campo da UI.
+		Platform::FlushLegacyRenderBatch();
       	CachTexture = tex;
 		glBindTexture(GL_TEXTURE_2D, nome);
 		Platform::InvalidateLegacyRenderStateCache();
@@ -419,6 +488,7 @@ void EnableDepthMask()
 {
     if(!DepthMaskEnable) 
 	{
+		Platform::FlushLegacyRenderBatch();
 		DepthMaskEnable = true;
      	glDepthMask(true);
 	}
@@ -428,6 +498,7 @@ void DisableDepthMask()
 {
     if(DepthMaskEnable) 
 	{
+		Platform::FlushLegacyRenderBatch();
 		DepthMaskEnable = false;
      	glDepthMask(false);
 	}
@@ -437,6 +508,7 @@ void EnableCullFace()
 {
     if(!CullFaceEnable) 
 	{
+		Platform::FlushLegacyRenderBatch();
 		CullFaceEnable = true;
         glEnable(GL_CULL_FACE);
 	}
@@ -446,9 +518,67 @@ void DisableCullFace()
 {
     if(CullFaceEnable) 
 	{
+		Platform::FlushLegacyRenderBatch();
 		CullFaceEnable = false;
         glDisable(GL_CULL_FACE);
 	}
+}
+
+void EnableStencilTest()
+{
+    if (!StencilTestEnable)
+    {
+        Platform::FlushLegacyRenderBatch();
+        StencilTestEnable = true;
+        glEnable(GL_STENCIL_TEST);
+    }
+}
+
+void DisableStencilTest()
+{
+    if (StencilTestEnable)
+    {
+        Platform::FlushLegacyRenderBatch();
+        StencilTestEnable = false;
+        glDisable(GL_STENCIL_TEST);
+    }
+}
+
+void SetLegacyDepthFunc(unsigned int function)
+{
+    if (!DepthFuncKnown || DepthFunction != function)
+    {
+        Platform::FlushLegacyRenderBatch();
+        DepthFuncKnown = true;
+        DepthFunction = function;
+        glDepthFunc(static_cast<GLenum>(function));
+    }
+}
+
+void SetLegacyStencilFunc(unsigned int function, int reference, unsigned int mask)
+{
+    if (!StencilFuncKnown || StencilFunction != function || StencilReference != reference || StencilMask != mask)
+    {
+        Platform::FlushLegacyRenderBatch();
+        StencilFuncKnown = true;
+        StencilFunction = function;
+        StencilReference = reference;
+        StencilMask = mask;
+        glStencilFunc(static_cast<GLenum>(function), reference, mask);
+    }
+}
+
+void SetLegacyStencilOp(unsigned int fail, unsigned int depthFail, unsigned int depthPass)
+{
+    if (!StencilOpKnown || StencilFail != fail || StencilDepthFail != depthFail || StencilDepthPass != depthPass)
+    {
+        Platform::FlushLegacyRenderBatch();
+        StencilOpKnown = true;
+        StencilFail = fail;
+        StencilDepthFail = depthFail;
+        StencilDepthPass = depthPass;
+        glStencilOp(static_cast<GLenum>(fail), static_cast<GLenum>(depthFail), static_cast<GLenum>(depthPass));
+    }
 }
 
 void DisableTexture( bool AlphaTest )
@@ -481,9 +611,12 @@ void DisableAlphaBlend()
 {
     if(AlphaBlendType != 0) 
 	{
+		// SetBlendMode descarrega o lote sob o blend anterior. A chamada GL
+		// precisa ocorrer depois; do contrario o lote anterior recebe o blend
+		// do proximo elemento e a transparencia da UI fica incorreta.
+		Platform::GetLegacyRenderAdapter().SetBlendMode(0);
 		AlphaBlendType = 0;
 		glDisable(GL_BLEND);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(0);
 	}
     EnableCullFace();
     EnableDepthMask();
@@ -505,10 +638,10 @@ void EnableAlphaTest(bool DepthMask)
 {
     if(AlphaBlendType != 2)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(2);
 		AlphaBlendType = 2;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(2);
 	}
     DisableCullFace();
 	if(DepthMask)
@@ -531,10 +664,10 @@ void EnableAlphaBlend()
 {
     if(AlphaBlendType != 3)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(3);
 		AlphaBlendType = 3;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE,GL_ONE);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(3);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -556,10 +689,10 @@ void EnableAlphaBlendMinus()
 {
     if(AlphaBlendType != 4)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(4);
 		AlphaBlendType = 4;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ZERO,GL_ONE_MINUS_SRC_COLOR);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(4);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -581,10 +714,10 @@ void EnableAlphaBlend2()
 {
     if(AlphaBlendType != 5)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(5);
 		AlphaBlendType = 5;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE_MINUS_SRC_COLOR,GL_ONE);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(5);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -606,10 +739,10 @@ void EnableAlphaBlend3()
 {
     if(AlphaBlendType != 6)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(6);
 		AlphaBlendType = 6;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(6);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -631,10 +764,10 @@ void EnableAlphaBlend4()
 {
     if(AlphaBlendType != 7)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(7);
 		AlphaBlendType = 7;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ONE,GL_ONE_MINUS_SRC_COLOR);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(7);
 	}
     DisableCullFace();
     DisableDepthMask();
@@ -656,10 +789,10 @@ void EnableLightMap()
 {
     if(AlphaBlendType != 1)
 	{
+		Platform::GetLegacyRenderAdapter().SetBlendMode(1);
 		AlphaBlendType = 1;
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_ZERO,GL_SRC_COLOR);
-		Platform::GetLegacyRenderAdapter().SetBlendMode(1);
 	}
     EnableCullFace();
     EnableDepthMask();
@@ -701,6 +834,8 @@ float ConvertY(float y)
 
 void BeginOpengl(int x,int y,int Width,int Height )
 {
+	// Troca de projecao/viewport e uma barreira de ordem para comandos do mundo.
+	Platform::FlushOpaqueWorldRenderQueue();
 	x = x * WindowWidth / GetWindowsX;
 	y = y * WindowHeight / GetWindowsY;
 	Width = Width * WindowWidth / GetWindowsX;
@@ -725,14 +860,14 @@ void BeginOpengl(int x,int y,int Width,int Height )
     SetLegacyAlphaTest(false);
     SetLegacyTexture2D(true);
     SetLegacyDepthTest(true);
-    glEnable(GL_CULL_FACE);
-   	glDepthMask(true);
+    // Culling e escrita de profundidade passam pelo cache; em frames onde o
+    // estado ja esta correto evitamos duas chamadas ao driver.
+    EnableCullFace();
+    EnableDepthMask();
     AlphaTestEnable = false;
 	TextureEnable   = true;
 	DepthTestEnable = true;
-	CullFaceEnable  = true;
-	DepthMaskEnable = true;
-    glDepthFunc(GL_LEQUAL);
+    SetLegacyDepthFunc(GL_LEQUAL);
 	SetLegacyAlphaRef(0.25f);
 	if(FogEnable) 
 	{
@@ -748,14 +883,14 @@ void BeginOpengl(int x,int y,int Width,int Height )
 		SetLegacyFog(false);
 	}
 
-    GetOpenGLMatrix(CameraMatrix);
-    SyncLegacyRenderMatrices();
+    SyncLegacyRenderMatricesAndCamera(CameraMatrix);
 }
 
 void SetLegacyTexture2D(bool enabled)
 {
 #ifdef _WIN32
-    enabled ? glEnable(GL_TEXTURE_2D) : glDisable(GL_TEXTURE_2D);
+    if (!Platform::IsGlslLegacyBackendEnabled())
+        enabled ? glEnable(GL_TEXTURE_2D) : glDisable(GL_TEXTURE_2D);
 #endif
     Platform::GetLegacyRenderAdapter().SetTexture2D(enabled);
 }
@@ -768,7 +903,8 @@ void SetLegacyDepthTest(bool enabled)
 void SetLegacyAlphaTest(bool enabled)
 {
 #ifdef _WIN32
-    enabled ? glEnable(GL_ALPHA_TEST) : glDisable(GL_ALPHA_TEST);
+    if (!Platform::IsGlslLegacyBackendEnabled())
+        enabled ? glEnable(GL_ALPHA_TEST) : glDisable(GL_ALPHA_TEST);
 #endif
     Platform::GetLegacyRenderAdapter().SetAlphaTest(enabled);
 }
@@ -776,7 +912,8 @@ void SetLegacyAlphaTest(bool enabled)
 void SetLegacyAlphaRef(float reference)
 {
 #ifdef _WIN32
-    glAlphaFunc(GL_GREATER, reference);
+    if (!Platform::IsGlslLegacyBackendEnabled())
+        glAlphaFunc(GL_GREATER, reference);
 #endif
     Platform::GetLegacyRenderAdapter().SetAlphaTestRef(reference);
 }
@@ -784,7 +921,8 @@ void SetLegacyAlphaRef(float reference)
 void SetLegacyFog(bool enabled)
 {
 #ifdef _WIN32
-    enabled ? glEnable(GL_FOG) : glDisable(GL_FOG);
+    if (!Platform::IsGlslLegacyBackendEnabled())
+        enabled ? glEnable(GL_FOG) : glDisable(GL_FOG);
 #endif
     // Em GLES3 o fog vira uniforme do shader. ATENCAO: o legado chama
     // glFogi(GL_FOG_MODE, GL_LINEAR) mas nunca define GL_FOG_START/GL_FOG_END,
@@ -801,7 +939,8 @@ static float g_corLegadaAtual[4] = { 1.f, 1.f, 1.f, 1.f };
 void SetLegacyColor4f(float red,float green,float blue,float alpha)
 {
 #ifdef _WIN32
-    glColor4f(red,green,blue,alpha);
+    if (!Platform::IsGlslLegacyBackendEnabled())
+        glColor4f(red,green,blue,alpha);
 #endif
     g_corLegadaAtual[0] = red;   g_corLegadaAtual[1] = green;
     g_corLegadaAtual[2] = blue;  g_corLegadaAtual[3] = alpha;
@@ -844,10 +983,57 @@ void SyncLegacyRenderMatrices()
     glGetFloatv(GL_PROJECTION_MATRIX, projection);
     glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
     Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
+    RememberLegacy3DMatrices(projection, modelView);
 #else
     // Em GLES3/WebGL2 nao ha pilha de matrizes: a fonte e a pilha em CPU.
     Platform::LegacyApplyMatricesToAdapter();
 #endif
+}
+
+void PushLegacyRenderMatrixSnapshot()
+{
+	const int slot = g_legacyMatrixSnapshotDepth++;
+	if (Platform::IsGlslLegacyBackendEnabled() && g_legacy3DMatricesKnown && slot < 8)
+	{
+		memcpy(g_legacyMatrixSnapshotProjection[slot], g_legacyProjection3D, sizeof(g_legacyProjection3D));
+		memcpy(g_legacyMatrixSnapshotModelView[slot], g_legacyModelView3D, sizeof(g_legacyModelView3D));
+		g_legacyMatrixSnapshotValid[slot] = true;
+	}
+}
+
+void PopLegacyRenderMatrixSnapshot()
+{
+	const int slot = --g_legacyMatrixSnapshotDepth;
+	if (Platform::IsGlslLegacyBackendEnabled() && slot >= 0 && slot < 8 && g_legacyMatrixSnapshotValid[slot])
+	{
+		Platform::GetLegacyRenderAdapter().SetMatrices(g_legacyMatrixSnapshotProjection[slot], g_legacyMatrixSnapshotModelView[slot]);
+		g_legacyMatrixSnapshotValid[slot] = false;
+	}
+	else
+		SyncLegacyRenderMatrices();
+}
+
+// BeginBitmap sempre instala gluOrtho2D(0, WindowWidth, 0, WindowHeight)
+// com modelview identidade. No backend GLSL publicar estes valores diretamente
+// evita duas consultas glGetFloatv ao driver para um estado que ja conhecemos.
+static void SyncLegacyBitmapMatrices()
+{
+    if (!Platform::IsGlslLegacyBackendEnabled())
+    {
+        SyncLegacyRenderMatrices();
+        return;
+    }
+
+    float projection[16] = { 0.f };
+    float modelView[16] = { 0.f };
+    projection[0] = 2.f / static_cast<float>(WindowWidth);
+    projection[5] = 2.f / static_cast<float>(WindowHeight);
+    projection[10] = -1.f;
+    projection[12] = -1.f;
+    projection[13] = -1.f;
+    projection[15] = 1.f;
+    modelView[0] = modelView[5] = modelView[10] = modelView[15] = 1.f;
+    Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
 }
 
 void EndOpengl()
@@ -1208,11 +1394,28 @@ void RenderPlane3D(float Width,float Height,float Matrix[3][4])
 
 void BeginSprite()
 {
+	Platform::FlushOpaqueWorldRenderQueue();
+	const int spriteMatrixSlot = g_spriteMatrixDepth++;
+	const bool canRestoreMatrices = Platform::IsGlslLegacyBackendEnabled() &&
+		g_legacy3DMatricesKnown && spriteMatrixSlot < 8;
+	if (canRestoreMatrices)
+	{
+		memcpy(g_spriteProjectionStack[spriteMatrixSlot], g_legacyProjection3D, sizeof(g_legacyProjection3D));
+		memcpy(g_spriteModelViewStack[spriteMatrixSlot], g_legacyModelView3D, sizeof(g_legacyModelView3D));
+		g_spriteMatrixSaved[spriteMatrixSlot] = true;
+	}
 	glPushMatrix();
 	glLoadIdentity();
 	// Sprites e particulas ja chegam no espaco da camera. O adapter GLSL precisa
 	// receber a matriz identidade antes de acumular os quads no VBO dinamico.
-	SyncLegacyRenderMatrices();
+	if (canRestoreMatrices)
+	{
+		float identity[16] = { 0.f };
+		identity[0] = identity[5] = identity[10] = identity[15] = 1.f;
+		Platform::GetLegacyRenderAdapter().SetMatrices(g_spriteProjectionStack[spriteMatrixSlot], identity);
+	}
+	else
+		SyncLegacyRenderMatrices();
 	// RenderSprites/RenderParticles preservam a ordem de emissao. O adapter so
 	// junta quads consecutivos com o mesmo estado (textura e blend), portanto
 	// transparencias nunca sao reordenadas.
@@ -1224,7 +1427,14 @@ void EndSprite()
 	// Envia o buffer dinamico enquanto a matriz de sprites ainda esta ativa.
 	Platform::GetLegacyRenderAdapter().EndBatch();
 	glPopMatrix();
-	SyncLegacyRenderMatrices();
+	const int spriteMatrixSlot = --g_spriteMatrixDepth;
+	if (Platform::IsGlslLegacyBackendEnabled() && spriteMatrixSlot >= 0 && spriteMatrixSlot < 8 && g_spriteMatrixSaved[spriteMatrixSlot])
+	{
+		Platform::GetLegacyRenderAdapter().SetMatrices(g_spriteProjectionStack[spriteMatrixSlot], g_spriteModelViewStack[spriteMatrixSlot]);
+		g_spriteMatrixSaved[spriteMatrixSlot] = false;
+	}
+	else
+		SyncLegacyRenderMatrices();
 }
 
 void RenderSprite(int Texture,vec3_t Position,float Width,float Height,vec3_t Light,float Rotation,float u,float v,float uWidth,float vHeight)
@@ -1311,28 +1521,17 @@ void RenderSpriteUV(int Texture,vec3_t Position,float Width,float Height,float (
 	Vector(x+Width, y+Height, z, p[2]);
 	Vector(x-Width, y+Height, z, p[3]);
 
-	Platform::RenderVertex vertices[4] = {};
+	// Preserva o blend e a cor que o emissor de particula/texto configurou.
+	// O lote de sprites ainda agrega quads consecutivos no adaptador.
+	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
-		vertices[i].position[0] = p[i][0];
-		vertices[i].position[1] = p[i][1];
-		vertices[i].position[2] = p[i][2];
-		vertices[i].color[0] = Light[i][0];
-		vertices[i].color[1] = Light[i][1];
-		vertices[i].color[2] = Light[i][2];
-		vertices[i].color[3] = Alpha;
-		vertices[i].texCoord[0] = UV[i][0];
-		vertices[i].texCoord[1] = UV[i][1];
+		renderer.Color4f(Light[i][0],Light[i][1],Light[i][2],Alpha);
+		renderer.TexCoord2f(UV[i][0],UV[i][1]);
+		renderer.Vertex3fv(p[i]);
 	}
-
-	Platform::RenderCommand command;
-	command.pass = Platform::RenderPassText;
-	command.topology = Platform::RenderTopologyQuads;
-	command.vertexCount = 4;
-	command.material.texture = Platform::Texture(Bitmaps[Texture].TextureNumber);
-	command.material.shader = Platform::RenderShaderTextV1;
-	command.material.transparent = true;
-	Platform::ExecuteRenderCommand(command, vertices);
+	renderer.End();
 }
 
 void RenderNumber(vec3_t Position,int Num,vec3_t Color,float Alpha,float Scale)
@@ -1398,6 +1597,7 @@ float RenderNumber2D(float x,float y,int Num,float Width,float Height)
 
 void BeginBitmap()
 {
+	Platform::FlushOpaqueWorldRenderQueue();
 	glMatrixMode(GL_PROJECTION);
 	glPushMatrix();
     glLoadIdentity();
@@ -1419,7 +1619,7 @@ void BeginBitmap()
     // continua desenhando com a matriz de PERSPECTIVA e todo sprite de UI cai
     // fora do enquadramento: a tela fica limpa mesmo com os quads sendo
     // emitidos. No Windows a funcao le a pilha do GL, entao nada muda la.
-    SyncLegacyRenderMatrices();
+    SyncLegacyBitmapMatrices();
     Platform::GetLegacyRenderAdapter().BeginBatch();
 }
 
@@ -1433,8 +1633,12 @@ void EndBitmap()
 	glMatrixMode(GL_PROJECTION);
 	glPopMatrix();
 
-    // Restaura no adapter as matrizes que o pop devolveu.
-    SyncLegacyRenderMatrices();
+    // Restaura no adapter as matrizes que o pop devolveu. No GLSL elas ja
+    // foram publicadas antes de entrar na UI; a copia CPU evita dois glGet.
+    if (Platform::IsGlslLegacyBackendEnabled() && g_legacy3DMatricesKnown)
+        Platform::GetLegacyRenderAdapter().SetMatrices(g_legacyProjection3D, g_legacyModelView3D);
+    else
+        SyncLegacyRenderMatrices();
 }
 
 void RenderColorRadius(float x, float y, float Width, float Height, float Alpha, int Flag, float radius)
@@ -1685,26 +1889,23 @@ void RenderBitmap(int Texture,float x,float y,float Width,float Height,float u,f
 	TEXCOORD(c[2],u+uWidth,v+vHeight);
 	TEXCOORD(c[1],u       ,v+vHeight);
 
-	Platform::RenderVertex vertices[4] = {};
+	// A UI legado deixa blend, alpha test e cor corrente preparados pelo
+	// chamador. Um RenderCommand com material padrao os sobrescreve e deixa
+	// botoes, textos e janelas incorretos no backend GLSL. Quads ainda entram
+	// no lote aberto por BeginBitmap.
+	Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+	renderer.SetTexture2D(true);
+	renderer.Begin(Platform::LegacyPrimitiveQuads);
 	for(int i=0;i<4;i++)
 	{
-		vertices[i].position[0] = p[i][0];
-		vertices[i].position[1] = p[i][1];
-		vertices[i].color[0] = vertices[i].color[1] = vertices[i].color[2] = 1.f;
-		vertices[i].color[3] = Alpha > 0.f ? Alpha : 1.f;
-		vertices[i].texCoord[0] = c[i][0];
-		vertices[i].texCoord[1] = c[i][1];
+		if(Alpha > 0.f)
+			renderer.Color4f(1.f,1.f,1.f,Alpha);
+		renderer.TexCoord2f(c[i][0],c[i][1]);
+		renderer.Vertex3f(p[i][0], p[i][1], 0.f);
+		if(Alpha > 0.f)
+			renderer.Color4f(1.f,1.f,1.f,1.f);
 	}
-
-	Platform::RenderCommand command;
-	command.pass = Platform::RenderPassUi;
-	command.topology = Platform::RenderTopologyQuads;
-	command.vertexCount = 4;
-	command.material.texture = Platform::Texture(Bitmaps[Texture].TextureNumber);
-	command.material.shader = Platform::RenderShaderUiV1;
-	command.material.depthTest = false;
-	command.material.transparent = true;
-	Platform::ExecuteRenderCommand(command, vertices);
+	renderer.End();
 }
 
 void RenderBitmapRotate(int Texture,float x,float y,float Width,float Height,float Rotate,float u,float v,float uWidth,float vHeight)

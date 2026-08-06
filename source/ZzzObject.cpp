@@ -4,6 +4,7 @@
 #include "Platform/LegacyFileAccess.h"
 #include "ZzzOpenglUtil.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/RenderPipeline.h"
 #include "ZzzBMD.h"
 #include "ZzzInfomation.h"
 #include "ZzzObject.h"
@@ -2815,6 +2816,9 @@ void RenderCharacter_AfterImage(CHARACTER* pCha, PART_t *pPart, bool Translate, 
 
 void RenderObjectVisual(OBJECT *o)
 {
+	// Efeitos e sprites podem usar blend; eles precisam ver todos os opacos
+	// emitidos pelo objeto antes de alterar a composicao.
+	Platform::FlushOpaqueWorldRenderQueue();
 	BMD *b = &Models[o->Type];
 	vec3_t p,Position;
 	vec3_t Light;
@@ -3329,6 +3333,7 @@ void RenderObjectVisual(OBJECT *o)
 
 void RenderObjects()
 {
+	Platform::BeginOpaqueWorldRenderQueue();
     float   range = 0.f;
     if( gMapManager.WorldActive==WD_10HEAVEN )
     {
@@ -3568,6 +3573,7 @@ void RenderObjects()
 		}
 	}
 
+	Platform::ExecuteOpaqueWorldRenderQueue();
 }
 
 void RenderObject_AfterCharacter(OBJECT *o,bool Translate,int Select, int ExtraMon)

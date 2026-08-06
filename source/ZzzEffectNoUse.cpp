@@ -47,6 +47,7 @@ void RenderPlane(int Texture, vec3_t Position, float Scale, float Angle)
     BindTexture(Texture);
     EnableAlphaBlend();
 
+    PushLegacyRenderMatrixSnapshot();
     glPushMatrix();
     glTranslatef(Position[0], Position[1], Position[2]);
     glRotatef(Angle, 0.f, 0.f, 1.f);
@@ -72,7 +73,7 @@ void RenderPlane(int Texture, vec3_t Position, float Scale, float Angle)
     renderer.End();
 
     glPopMatrix();
-    SyncLegacyRenderMatrices();
+    PopLegacyRenderMatrixSnapshot();
     DisableAlphaBlend();
 }
 
@@ -240,6 +241,7 @@ void RenderMagicBox(int Texture, vec3_t Position, float Angle)
 
     BindTexture(Texture);
     EnableAlphaBlend();
+    PushLegacyRenderMatrixSnapshot();
     glPushMatrix();
     glTranslatef(Position[0], Position[1], Position[2]);
     glRotatef(Angle, 0.f, 0.f, 1.f);
@@ -301,7 +303,7 @@ void RenderMagicBox(int Texture, vec3_t Position, float Angle)
     renderer.End();
 
     glPopMatrix();
-    SyncLegacyRenderMatrices();
+    PopLegacyRenderMatrixSnapshot();
     DisableAlphaBlend();
 }
 

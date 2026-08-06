@@ -11,6 +11,7 @@
 #include <math.h>
 #include "ZzzOpenglUtil.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/RenderPipeline.h"
 #include "ZzzBMD.h"
 #include "ZzzLodTerrain.h"
 #include "zzzpath.h"
@@ -1293,8 +1294,71 @@ inline void VertexBlend3()
 	TerrainVertexEmit(TerrainTextureCoord[3],BlendLight,1.f,TerrainVertex[3]);
 }
 
+static bool CanQueueOpaqueTerrainFace(int texture)
+{
+    if (!Platform::IsOpaqueWorldRenderQueueActive() || texture == 5 || texture == 255)
+        return false;
+    if (TerrainMappingAlpha[TerrainIndex1] < 1.f || TerrainMappingAlpha[TerrainIndex2] < 1.f ||
+        TerrainMappingAlpha[TerrainIndex3] < 1.f || TerrainMappingAlpha[TerrainIndex4] < 1.f)
+        return false;
+
+    // Estes mapas usam alpha-test na camada base para texturas especificas.
+    // Mantemos o caminho sequencial ate que esses materiais tenham uma variante
+    // explicita na fila.
+    if (gMapManager.WorldActive == WD_39KANTURU_3RD ||
+        (gMapManager.WorldActive >= WD_45CURSEDTEMPLE_LV1 && gMapManager.WorldActive <= WD_45CURSEDTEMPLE_LV6) ||
+        gMapManager.WorldActive == WD_51HOME_6TH_CHAR ||
+        gMapManager.WorldActive == WD_69EMPIREGUARDIAN1 || gMapManager.WorldActive == WD_70EMPIREGUARDIAN2 ||
+        gMapManager.WorldActive == WD_71EMPIREGUARDIAN3 || gMapManager.WorldActive == WD_72EMPIREGUARDIAN4)
+        return false;
+#ifdef ASG_ADD_MAP_KARUTAN
+    if (IsKarutanMap())
+        return false;
+#endif
+
+    const BITMAP_t* bitmap = Bitmaps.GetTexture(BITMAP_MAPTILE + texture);
+    return bitmap != NULL && bitmap->Components == 3;
+}
+
+static void SubmitOpaqueTerrainFace(int texture)
+{
+    Platform::RenderVertex vertices[4];
+    const int terrainIndices[4] = { TerrainIndex1, TerrainIndex2, TerrainIndex3, TerrainIndex4 };
+    for (int index = 0; index < 4; ++index)
+    {
+        Platform::RenderVertex& vertex = vertices[index];
+        vertex.position[0] = TerrainVertex[index][0];
+        vertex.position[1] = TerrainVertex[index][1];
+        vertex.position[2] = TerrainVertex[index][2];
+        vertex.color[0] = PrimaryTerrainLight[terrainIndices[index]][0];
+        vertex.color[1] = PrimaryTerrainLight[terrainIndices[index]][1];
+        vertex.color[2] = PrimaryTerrainLight[terrainIndices[index]][2];
+        vertex.color[3] = 1.f;
+        vertex.texCoord[0] = TerrainTextureCoord[index][0];
+        vertex.texCoord[1] = TerrainTextureCoord[index][1];
+        vertex.normal[0] = 0.f; vertex.normal[1] = 0.f; vertex.normal[2] = 1.f;
+    }
+
+    Platform::RenderCommand command;
+    command.pass = Platform::RenderPassTerrain;
+    command.topology = Platform::RenderTopologyQuads;
+    command.material.shader = Platform::RenderShaderLegacyCompatV1;
+    command.material.texture = Platform::Texture(Bitmaps[BITMAP_MAPTILE + texture].TextureNumber);
+    command.material.depthTest = true;
+    Platform::SubmitOpaqueWorldRenderCommand(command, vertices, 4);
+}
+
 void RenderFace(int Texture,int mx,int my)
 {
+	if (CanQueueOpaqueTerrainFace(Texture))
+	{
+		// O ultimo tile pode ter sido agua/blend. A fila opaca requer blend
+		// desabilitado quando for materializada pelo adaptador GLSL.
+		DisableAlphaBlend();
+		SubmitOpaqueTerrainFace(Texture);
+		return;
+	}
+	Platform::FlushOpaqueWorldRenderQueue();
 	if(gMapManager.WorldActive == WD_39KANTURU_3RD)
 	{
 		if(Texture == 3)
@@ -2565,6 +2629,7 @@ extern void RenderCharactersClient();
 
 void RenderTerrain(bool EditFlag)
 {
+	const bool ownsOpaqueQueue = !Platform::IsOpaqueWorldRenderQueueActive() && Platform::BeginOpaqueWorldRenderQueue();
     if( !EditFlag )
     {
         if(gMapManager.WorldActive == WD_8TARKAN)
@@ -2606,6 +2671,8 @@ void RenderTerrain(bool EditFlag)
 	}
 	if ( !EditFlag )
 	{
+		// Grama, ponteiros e as camadas alpha posteriores sao sequenciais.
+		Platform::FlushOpaqueWorldRenderQueue();
 		EnableAlphaTest();
 		if ( TerrainGrassEnable && gMapManager.WorldActive != WD_7ATLANSE && !IsDoppelGanger3())
 		{
@@ -2618,6 +2685,8 @@ void RenderTerrain(bool EditFlag)
 		RenderPointers();
 		EnableDepthTest();
 	}
+	if (ownsOpaqueQueue)
+		Platform::ExecuteOpaqueWorldRenderQueue();
 }
 
 void RenderTerrain_After(bool EditFlag)

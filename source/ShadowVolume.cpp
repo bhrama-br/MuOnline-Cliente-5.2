@@ -5,6 +5,7 @@
 #include "stdafx.h"
 #include "ZzzOpenglUtil.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/RenderPipeline.h"
 #include "ZzzBmd.h"
 #include "ZzzInfomation.h"
 #include "ZzzObject.h"
@@ -24,8 +25,9 @@ void InsertShadowVolume( CShadowVolume *psv)
 
 void RenderShadowVolumesAsFrame( void)
 {
+	Platform::FlushOpaqueWorldRenderQueue();
 	glPolygonMode( GL_FRONT, GL_LINE);
-	glDepthMask( true);
+	EnableDepthMask();
 	DisableAlphaBlend();
 	DisableTexture();
 	vec3_t vLight = { 0.4f, 0.f, 0.f};
@@ -44,13 +46,14 @@ void RenderShadowVolumesAsFrame( void)
 
 void ShadeWithShadowVolumes( void)
 {
+	Platform::FlushOpaqueWorldRenderQueue();
 	DisableAlphaBlend();
 
 	DisableDepthMask();
-	glEnable( GL_STENCIL_TEST);
+	EnableStencilTest();
 
 	glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-	glStencilFunc( GL_ALWAYS, 0xFFFFFFFF, 0xFFFFFFFF);
+	SetLegacyStencilFunc(GL_ALWAYS, 0xFFFFFFFF, 0xFFFFFFFF);
 
 	while ( m_qSV.GetCount() > 0)
 	{
@@ -62,20 +65,21 @@ void ShadeWithShadowVolumes( void)
 
 	glFrontFace( GL_CCW);
 	glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-	glDisable( GL_STENCIL_TEST);
+	DisableStencilTest();
 	EnableDepthMask();
 }
 
 void RenderShadowToScreen( void)
 {
+	Platform::FlushOpaqueWorldRenderQueue();
 	DisableDepthTest();
 	DisableDepthMask();
-	glEnable( GL_STENCIL_TEST);
+	EnableStencilTest();
 
-	glStencilFunc( GL_LEQUAL, 0x1, 0xFFFFFFFF);
-	glStencilOp( GL_KEEP, GL_KEEP, GL_KEEP);
+	SetLegacyStencilFunc(GL_LEQUAL, 0x1, 0xFFFFFFFF);
+	SetLegacyStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 
-	glDepthFunc( GL_ALWAYS);
+	SetLegacyDepthFunc(GL_ALWAYS);
 
 	EnableAlphaBlendMinus();
 	DisableTexture();
@@ -99,8 +103,8 @@ void RenderShadowToScreen( void)
 		renderer.Vertex3f(p[i][0], p[i][1], 0.f);
 	}
 	renderer.End();
-	glDepthFunc( GL_LESS);
-	glDisable( GL_STENCIL_TEST);
+	SetLegacyDepthFunc(GL_LESS);
+	DisableStencilTest();
 	EnableDepthMask();
 }
 
@@ -319,10 +323,10 @@ void CShadowVolume::RenderShadowVolume( void)
 void CShadowVolume::Shade( void)
 {
 	glFrontFace( GL_CCW);
-	glStencilOp( GL_KEEP, GL_KEEP, GL_INCR);
+	SetLegacyStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 	RenderShadowVolume();
 
 	glFrontFace( GL_CW);
-	glStencilOp( GL_KEEP, GL_KEEP, GL_DECR);
+	SetLegacyStencilOp(GL_KEEP, GL_KEEP, GL_DECR);
 	RenderShadowVolume();
 }

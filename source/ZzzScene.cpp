@@ -68,6 +68,10 @@
 #include "MapManager.h"
 #include <thread>
 #include <chrono>
+#include <stdio.h>
+
+static DWORD g_renderStatsStart = 0;
+static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuMs);
 #include "Interfaces.h"
 #include "Camera3D.h"
 #include "CharacterList.h"
@@ -1564,7 +1568,6 @@ void LoadingScene(HDC hDC)
 
 	::EndBitmap();
 	::EndOpengl();
-	::glFlush();
 	::SwapBuffers(hDC);
 
 	SAFE_DELETE(rUIMng.m_pLoadingScene);
@@ -2532,6 +2535,13 @@ void MainScene(HDC hDC)
 		g_PhysicsManager.Render();
 
 		//#if defined(_DEBUG) || defined(LDS_FOR_DEVELOPMENT_TESTMODE) || defined(LDS_UNFIXED_FIXEDFRAME_FORDEBUG)
+		// A leitura ocorre antes de desenhar o overlay, portanto a amostra mostra
+		// somente a cena. Ative com -renderstats junto de -glslrenderer.
+		const bool showRenderStats = (::strstr(::GetCommandLineA(), "-renderstats") != NULL);
+		const bool writeRenderStatsCsv = (::strstr(::GetCommandLineA(), "-renderstatscsv") != NULL);
+		const Platform::LegacyRenderFrameStats renderStats = Platform::GetLegacyRenderFrameStats();
+		if (writeRenderStatsCsv)
+			CaptureRenderStatsCsv(renderStats, GetTickCount() - g_renderStatsStart);
 		BeginBitmap();
 		unicode::t_char szDebugText[128];
 		unicode::_sprintf(szDebugText, "FPS : %.1f Connected: %d", FPS, g_bGameServerConnected);
@@ -2542,6 +2552,36 @@ void MainScene(HDC hDC)
 		g_pRenderText->SetTextColor(255, 255, 255, 200);
 		g_pRenderText->RenderText(120, 26, szDebugText);
 		g_pRenderText->RenderText(120, 36, szMousePos);
+		if (showRenderStats)
+		{
+			unicode::t_char szRenderStats[160];
+			unicode::_sprintf(szRenderStats, "Render: draws %lu verts %lu vbo %lu KB (%lu sub %lu alloc) tex %lu/%lu KB",
+				static_cast<unsigned long>(renderStats.drawCalls),
+				static_cast<unsigned long>(renderStats.vertices),
+				static_cast<unsigned long>(renderStats.vertexUploadBytes / 1024),
+				static_cast<unsigned long>(renderStats.bufferSubDataCalls),
+				static_cast<unsigned long>(renderStats.bufferDataCalls),
+				static_cast<unsigned long>(renderStats.textureUploads),
+				static_cast<unsigned long>(renderStats.textureUploadBytes / 1024));
+			g_pRenderText->RenderText(120, 46, szRenderStats);
+			unicode::_sprintf(szRenderStats, "State: tex %lu blend %lu depth %lu alpha %lu fog %lu prog %lu",
+				static_cast<unsigned long>(renderStats.textureChanges),
+				static_cast<unsigned long>(renderStats.blendStateChanges),
+				static_cast<unsigned long>(renderStats.depthStateChanges),
+				static_cast<unsigned long>(renderStats.alphaTestChanges),
+				static_cast<unsigned long>(renderStats.fogChanges),
+				static_cast<unsigned long>(renderStats.programChanges));
+			g_pRenderText->RenderText(120, 56, szRenderStats);
+			unicode::_sprintf(szRenderStats, "Flush: all %lu matrix %lu tex %lu blend %lu depth %lu alpha %lu fog %lu",
+				static_cast<unsigned long>(renderStats.batchFlushes),
+				static_cast<unsigned long>(renderStats.matrixFlushes),
+				static_cast<unsigned long>(renderStats.textureFlushes),
+				static_cast<unsigned long>(renderStats.blendFlushes),
+				static_cast<unsigned long>(renderStats.depthFlushes),
+				static_cast<unsigned long>(renderStats.alphaFlushes),
+				static_cast<unsigned long>(renderStats.fogFlushes));
+			g_pRenderText->RenderText(120, 66, szRenderStats);
+		}
 		g_pRenderText->SetFont(g_hFont);
 		EndBitmap();
 		//#endif // defined(_DEBUG) || defined(LDS_FOR_DEVELOPMENT_TESTMODE) || defined(LDS_UNFIXED_FIXEDFRAME_FORDEBUG)
@@ -2895,12 +2935,83 @@ bool CheckRenderNextFrame()
 	return false;
 }
 
+// Grava uma amostra agregada, e nao um registro por frame. O aquecimento evita
+// que loading/recriacao de recursos contamine a comparacao entre cenas.
+static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuMs)
+{
+	struct CaptureState
+	{
+		CaptureState() : scene(-1), world(-1), width(0), height(0), glslBackend(false), warmup(0), frames(0), cpuTotal(0),
+			draws(0), vertices(0), vboBytes(0), bufferData(0), bufferSubData(0), flushes(0), textureUploads(0),
+			textureBytes(0), textureChanges(0), matrixFlushes(0), textureFlushes(0), blendFlushes(0), depthFlushes(0),
+			alphaFlushes(0), fogFlushes(0) {}
+		int scene, world, width, height;
+		bool glslBackend;
+		unsigned int warmup, frames;
+		unsigned long long cpuTotal, draws, vertices, vboBytes, bufferData, bufferSubData, flushes, textureUploads,
+			textureBytes, textureChanges, matrixFlushes, textureFlushes, blendFlushes, depthFlushes, alphaFlushes, fogFlushes;
+		DWORD cpuSamples[120];
+	};
+	static CaptureState state;
+
+	const int scene = SceneFlag;
+	const int world = gMapManager.WorldActive;
+	const int width = static_cast<int>(WindowWidth);
+	const int height = static_cast<int>(WindowHeight);
+	const bool glslBackend = Platform::IsGlslLegacyBackendEnabled();
+	if (state.scene != scene || state.world != world || state.width != width || state.height != height || state.glslBackend != glslBackend)
+	{
+		state = CaptureState();
+		state.scene = scene; state.world = world; state.width = width; state.height = height; state.glslBackend = glslBackend;
+	}
+
+	if (state.warmup++ < 180)
+		return;
+
+	const unsigned int sample = state.frames++;
+	state.cpuSamples[sample] = renderCpuMs;
+	state.cpuTotal += renderCpuMs;
+	state.draws += stats.drawCalls; state.vertices += stats.vertices; state.vboBytes += stats.vertexUploadBytes;
+	state.bufferData += stats.bufferDataCalls; state.bufferSubData += stats.bufferSubDataCalls; state.flushes += stats.batchFlushes;
+	state.textureUploads += stats.textureUploads; state.textureBytes += stats.textureUploadBytes; state.textureChanges += stats.textureChanges;
+	state.matrixFlushes += stats.matrixFlushes; state.textureFlushes += stats.textureFlushes; state.blendFlushes += stats.blendFlushes;
+	state.depthFlushes += stats.depthFlushes; state.alphaFlushes += stats.alphaFlushes; state.fogFlushes += stats.fogFlushes;
+	if (state.frames < 120)
+		return;
+
+	DWORD sortedCpu[120];
+	memcpy(sortedCpu, state.cpuSamples, sizeof(sortedCpu));
+	for (int i = 0; i < 120; ++i)
+		for (int j = i + 1; j < 120; ++j)
+			if (sortedCpu[j] < sortedCpu[i]) { const DWORD value = sortedCpu[i]; sortedCpu[i] = sortedCpu[j]; sortedCpu[j] = value; }
+
+	// A versao 2 evita misturar as linhas antigas, que nao possuíam a coluna
+	// de backend, com as capturas comparativas da Fase 8.
+	FILE* file = fopen("RenderPerformance_v2.csv", "a+");
+	if (file != NULL)
+	{
+		fseek(file, 0, SEEK_END);
+		if (ftell(file) == 0)
+			fprintf(file, "scene,world,resolution,backend,frames,cpu_ms_avg,cpu_ms_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg\n");
+		fprintf(file, "%d,%d,%dx%d,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+			scene, world, width, height, glslBackend ? "glsl" : "fixed", state.cpuTotal / 120.0, static_cast<unsigned long>(sortedCpu[113]),
+			state.draws / 120.0, state.vertices / 120.0, state.vboBytes / (120.0 * 1024.0), state.bufferData / 120.0,
+			state.bufferSubData / 120.0, state.flushes / 120.0, state.textureUploads / 120.0, state.textureBytes / (120.0 * 1024.0),
+			state.textureChanges / 120.0, state.matrixFlushes / 120.0, state.textureFlushes / 120.0, state.blendFlushes / 120.0,
+			state.depthFlushes / 120.0, state.alphaFlushes / 120.0, state.fogFlushes / 120.0);
+		fclose(file);
+	}
+	state = CaptureState();
+	state.scene = scene; state.world = world; state.width = width; state.height = height; state.glslBackend = glslBackend;
+}
+
 void RenderScene(HDC hDC)
 {
     // A amostra e zerada antes de qualquer emissao deste quadro. Depois do
     // SwapBuffers, GetLegacyRenderFrameStats() contem exatamente o frame que
     // acabou de ser apresentado, pronto para o futuro overlay/CSV.
     Platform::ResetLegacyRenderFrameStats();
+	g_renderStatsStart = GetTickCount();
     CalcFPS();
 	UpdateSceneState();
 

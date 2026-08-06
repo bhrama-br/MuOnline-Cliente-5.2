@@ -132,4 +132,14 @@ namespace Platform
     // Ponte para migracao gradual: um emissor pode usar material e comando
     // explicitos sem precisar esperar que todo o passe seja convertido.
     void ExecuteRenderCommand(const RenderCommand& command, const RenderVertex* vertices);
+
+    // Fila de opacos do mundo. Ela e ativada somente no backend GLSL e deve
+    // ser descarregada antes de qualquer emissao transparente/legada.
+    bool BeginOpaqueWorldRenderQueue();
+    bool IsOpaqueWorldRenderQueueActive();
+    void SubmitOpaqueWorldRenderCommand(const RenderCommand& command, const RenderVertex* vertices, size_t vertexCount);
+    // Barreira entre blocos: desenha o que foi acumulado, mas mantem a fila
+    // pronta para continuar recebendo opacos no mesmo frame.
+    void FlushOpaqueWorldRenderQueue();
+    void ExecuteOpaqueWorldRenderQueue();
 }

@@ -173,7 +173,6 @@ void CUIMng::RenderTitleSceneUI(HDC hDC, DWORD dwNow, DWORD dwTotal)
 
 	::EndBitmap();
 	::EndOpengl();
-	::glFlush();
 	::SwapBuffers(hDC);
 }
 

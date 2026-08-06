@@ -304,7 +304,10 @@ SetLegacyTexture2D(true);
 		Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 		renderer.SetTexture2D(true);
 		renderer.BindTexture(Bitmaps[m_nTexID].TextureNumber);
-		renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+		// CSprite sempre emite os quatro cantos de um retangulo (LT, RT, RB,
+		// LB). Como quad ele entra no lote aberto de BeginBitmap e conserva a
+		// mesma triangulacao e ordem visual do triangle fan antigo.
+		renderer.Begin(Platform::LegacyPrimitiveQuads);
 		renderer.Color4f(m_byRed / 255.f, m_byGreen / 255.f, m_byBlue / 255.f, m_byAlpha / 255.f);
 
 		for (int i = LT; i < POS_MAX; ++i)
@@ -327,7 +330,9 @@ SetLegacyTexture2D(false);
 		Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
 		renderer.SetTexture2D(false);
 		renderer.BindTexture(0);
-		renderer.Begin(Platform::LegacyPrimitiveTriangleFan);
+		// Mesmo caminho para sprites sem textura: quads consecutivos podem ser
+		// enviados juntos, sem reordenar nenhum elemento transparente.
+		renderer.Begin(Platform::LegacyPrimitiveQuads);
 		renderer.Color4f(m_byRed / 255.f, m_byGreen / 255.f, m_byBlue / 255.f, m_byAlpha / 255.f);
 		for (int i = LT; i < POS_MAX; ++i)
 			renderer.Vertex3f(m_aScrCoord[i].fX * m_fScaleX,

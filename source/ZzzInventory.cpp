@@ -11815,6 +11815,82 @@ bool IsStrifeMap(int nMapIndex)
 
 unsigned int MarkColor[16];
 
+// A grade de criacao de guilda contem apenas 16 amostras imutaveis. Antes ela
+// sobrescrevia BITMAP_GUILD para cada quadrado, fazendo dezenas de uploads por
+// frame. Estas texturas preservam exatamente os mesmos pixels e sao criadas
+// sob demanda no contexto corrente.
+static GLuint g_GuildColorTextures[16] = { 0 };
+static unsigned int g_GuildColorValues[16] = { 0 };
+static bool g_GuildColorValid[16] = { false };
+static int g_GuildColorWidth = 0;
+static int g_GuildColorHeight = 0;
+#ifdef _WIN32
+static HGLRC g_GuildColorContext = NULL;
+#endif
+
+static GLuint GetGuildColorTexture(int index, int width, int height)
+{
+	if (index < 0 || index >= 16 || width <= 0 || height <= 0)
+		return 0;
+
+#ifdef _WIN32
+	const HGLRC context = wglGetCurrentContext();
+	if (g_GuildColorContext != context)
+	{
+		memset(g_GuildColorTextures, 0, sizeof(g_GuildColorTextures));
+		memset(g_GuildColorValid, 0, sizeof(g_GuildColorValid));
+		g_GuildColorContext = context;
+	}
+#endif
+	if (g_GuildColorWidth != width || g_GuildColorHeight != height)
+	{
+		memset(g_GuildColorValid, 0, sizeof(g_GuildColorValid));
+		g_GuildColorWidth = width;
+		g_GuildColorHeight = height;
+	}
+
+	const unsigned int color = (index == 0)
+		? ((255U << 24) + (128U << 16) + (128U << 8) + 128U)
+		: MarkColor[index];
+	if (g_GuildColorValid[index] && g_GuildColorValues[index] == color)
+		return g_GuildColorTextures[index];
+
+	std::vector<unsigned int> pixels(static_cast<size_t>(width) * static_cast<size_t>(height),
+		(index == 0) ? (255U << 24) : color);
+	if (index == 0)
+	{
+		for (int i = 0; i < 8; ++i)
+		{
+			const int first = i * (width + 1);
+			const int second = 7 + i * (width - 1);
+			if (first >= 0 && first < width * height) pixels[first] = color;
+			if (second >= 0 && second < width * height) pixels[second] = color;
+		}
+	}
+
+	Platform::FlushLegacyRenderBatch();
+	if (g_GuildColorTextures[index] == 0)
+		glGenTextures(1, &g_GuildColorTextures[index]);
+	if (g_GuildColorTextures[index] == 0)
+		return 0;
+	glBindTexture(GL_TEXTURE_2D, g_GuildColorTextures[index]);
+	Platform::InvalidateLegacyRenderStateCache();
+	if (g_GuildColorValid[index])
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
+	else
+	{
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	}
+	Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(width) * static_cast<unsigned long long>(height) * 4ULL);
+	g_GuildColorValues[index] = color;
+	g_GuildColorValid[index] = true;
+	return g_GuildColorTextures[index];
+}
+
 void CreateGuildMark( int nMarkIndex, bool blend )
 {
 	BITMAP_t *b = &Bitmaps[BITMAP_GUILD];
@@ -11862,10 +11938,14 @@ void CreateGuildMark( int nMarkIndex, bool blend )
 		}
 	}
 
+	// BITMAP_GUILD e reutilizada por varias marcas. Finalize qualquer quad que
+	// ainda a esteja amostrando antes de substituir seus pixels.
+	Platform::FlushLegacyRenderBatch();
 	glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
 	Platform::InvalidateLegacyRenderStateCache();
 
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,Width,Height,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+	Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(Width) * static_cast<unsigned long long>(Height) * 4ULL);
 }
 
 
@@ -11945,10 +12025,13 @@ void CreateCastleMark ( int Type, BYTE* buffer, bool blend )
             offset += 4;
 		}
 	}
+    // A textura pode ter sido usada pelo lote anterior desta mesma janela.
+    Platform::FlushLegacyRenderBatch();
     glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
     Platform::InvalidateLegacyRenderStateCache();
 
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,Width,Height,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+	Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(Width) * static_cast<unsigned long long>(Height) * 4ULL);
 }
 
 
@@ -11962,6 +12045,12 @@ void RenderGuildColor(float x,float y,int SizeX,int SizeY,int Index)
 
 	Width  = (int)b->Width;
 	Height = (int)b->Height;
+	const GLuint cachedTexture = GetGuildColorTexture(Index, Width, Height);
+	if (cachedTexture != 0)
+	{
+		RenderBitmap(-static_cast<int>(cachedTexture), x, y, (float)SizeX, (float)SizeY);
+		return;
+	}
 	BYTE *Buffer = b->Buffer;
 	unsigned int Color = MarkColor[Index];
 
@@ -12001,10 +12090,14 @@ void RenderGuildColor(float x,float y,int SizeX,int SizeY,int Index)
 		}
 	}
 
+	// Cada amostra de cor reusa esta textura. O flush preserva a cor de todos
+	// os quads anteriores antes que o proximo upload altere o conteudo.
+	Platform::FlushLegacyRenderBatch();
 	glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
 	Platform::InvalidateLegacyRenderStateCache();
 
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,Width,Height,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+	Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(Width) * static_cast<unsigned long long>(Height) * 4ULL);
     RenderBitmap(BITMAP_GUILD,x,y,(float)SizeX,(float)SizeY);
 }
 

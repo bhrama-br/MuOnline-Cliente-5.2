@@ -2778,14 +2778,22 @@ void CUIRenderTextOriginal::UploadText(int sx,int sy,int Width,int Height)
 	}
 	if(Width > 0 && Height > 0 && sx+Width > 0 && sy+Height > 0)
 	{
+		// BITMAP_FONT e reutilizada para cada texto. A geometria que referencia
+		// o conteudo anterior precisa ser enviada antes de sobrescrever a textura.
+		Platform::FlushLegacyRenderBatch();
 		glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
 		Platform::InvalidateLegacyRenderStateCache();
-		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,(int)b->Width,(int)b->Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+		// FontInput.tga ja alocou este nivel durante OpenBasicData. Atualizar o
+		// conteudo evita recriar o armazenamento da textura a cada texto.
+		glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(int)b->Width,(int)b->Height,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+		Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(b->Width) * static_cast<unsigned long long>(b->Height) * 4ULL);
 
 		float TextureUWidth = (Width+0.01f)/b->Width;
 		float TextureVHeight = (Height+0.01f)/b->Height;
 		RenderBitmap(BITMAP_FONT, (float)sx, (float)sy, (float)Width, (float)Height,
 			TextureU, TextureV, TextureUWidth, TextureVHeight, false, false);
+		// Materializa este texto antes do proximo UploadText trocar BITMAP_FONT.
+		Platform::FlushLegacyRenderBatch();
 	}
 }
 
@@ -3421,14 +3429,20 @@ void CUITextInputBox::UploadText(int sx,int sy,int Width,int Height)
 	}
 	if(Width > 0 && Height > 0 && sx+Width > 0 && sy+Height > 0)
 	{
+		// BITMAP_FONT e um scratch texture compartilhado por todos os campos.
+		// Sem estas barreiras o lote inteiro amostra o ultimo texto enviado.
+		Platform::FlushLegacyRenderBatch();
 		glBindTexture(GL_TEXTURE_2D,b->TextureNumber);
 		Platform::InvalidateLegacyRenderStateCache();
-		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,(int)b->Width,(int)b->Height,0,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+		// O armazenamento de BITMAP_FONT foi criado ao carregar FontInput.tga.
+		glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(int)b->Width,(int)b->Height,GL_RGBA,GL_UNSIGNED_BYTE,b->Buffer);
+		Platform::RecordLegacyTextureUpload(static_cast<unsigned long long>(b->Width) * static_cast<unsigned long long>(b->Height) * 4ULL);
 
 		float TextureUWidth = (Width+0.01f)/b->Width;
 		float TextureVHeight = (Height+0.01f)/b->Height;
 		RenderBitmap(BITMAP_FONT, (float)sx, (float)sy, (float)Width, (float)Height,
 			TextureU, TextureV, TextureUWidth, TextureVHeight, false, false);
+		Platform::FlushLegacyRenderBatch();
 	}
 }
 

@@ -1805,7 +1805,7 @@ void CUIPhotoViewer::RenderPhotoCharacter()
 	DepthTestEnable = true;
 	CullFaceEnable  = true;
 	DepthMaskEnable = true;
-	glDepthFunc(GL_LEQUAL);
+	SetLegacyDepthFunc(GL_LEQUAL);
 	glAlphaFunc(GL_GREATER,0.25f);
 	SetLegacyFog(false);
 	glClear(GL_DEPTH_BUFFER_BIT);

@@ -59,6 +59,11 @@ namespace
 
             if (m_renderContext != NULL)
             {
+				// O adaptador GLSL mantem VAO/VBO/programa do contexto atual.
+				// Esquece esses nomes enquanto o contexto ainda esta valido para
+				// que uma recriacao nao reutilize objetos que pertenciam ao
+				// contexto destruido.
+				Platform::InvalidateLegacyRenderResources();
                 if (!::wglMakeCurrent(NULL, NULL))
                     success = SaveLastError();
                 if (!::wglDeleteContext(m_renderContext))

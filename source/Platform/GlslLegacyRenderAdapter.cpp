@@ -228,6 +228,10 @@ namespace
               m_fogEnabled(false), m_fogStart(0.f), m_fogEnd(1.f),
               m_alphaTestEnabled(false), m_texture2DEnabled(false), m_depthTestEnabled(false), m_texture(0), m_batching(false), m_failed(false), m_logged(false)
         {
+			// Capacidade inicial para os lotes comuns de UI/mundo. clear() preserva
+			// essa memoria entre frames, evitando realocacoes no aquecimento.
+			m_uiDrawList.vertices.reserve(8192);
+			m_drawVertices.reserve(8192);
             SetIdentity(m_projection);
             SetIdentity(m_modelView);
             SetColor(1.f, 1.f, 1.f, 1.f);
@@ -302,29 +306,41 @@ namespace
         void Flush()
         {
             if (m_vertices.empty() || !EnsureResources()) return;
-            std::vector<LegacyVertex> drawVertices;
+            // Linhas, fans e triangulos precisam de uma conversao antes do
+            // desenho. Reutilizar este armazenamento evita alocar/liberar um
+            // vetor temporario a cada flush desses primitivos.
+            std::vector<LegacyVertex>& drawVertices = m_drawVertices;
+            drawVertices.clear();
+            const LegacyVertex* drawVertexData = NULL;
+            size_t drawVertexCount = 0;
             const bool indexedQuads = (m_primitive == Platform::LegacyPrimitiveQuads);
             if (indexedQuads)
             {
                 // Quads compartilham os quatro vertices entre os dois triangulos.
                 // Ignora a cauda incompleta, igual ao GL_QUADS legado.
                 const size_t quadCount = m_vertices.size() / 4;
-                drawVertices.assign(m_vertices.begin(), m_vertices.begin() + quadCount * 4);
+                drawVertexCount = quadCount * 4;
                 EnsureQuadIndexCapacity(quadCount);
+                if (drawVertexCount > 0)
+                    drawVertexData = &m_vertices[0];
             }
             else
             {
                 BuildDrawVertices(drawVertices);
+                drawVertexCount = drawVertices.size();
+                if (drawVertexCount > 0)
+                    drawVertexData = &drawVertices[0];
             }
 
             // Um Begin(GL_QUADS) incompleto nao gera primitiva. Depois da
-            // conversao para triangulos ele tambem pode produzir vetor vazio;
-            // nunca passe &drawVertices[0] nesse caso.
-            if (drawVertices.empty())
+            // conversao para triangulos ele tambem pode produzir vetor vazio.
+            if (drawVertexCount == 0)
             {
                 m_vertices.clear();
                 return;
             }
+
+            ++m_frameStats.batchFlushes;
 
             // ESTADO REDUNDANTE NAO E REENVIADO.
             //
@@ -426,15 +442,16 @@ namespace
                 glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
                 m_vaoAtivo = true;
             }
-            const GLsizeiptr uploadBytes = static_cast<GLsizeiptr>(drawVertices.size() * sizeof(LegacyVertex));
+            const GLsizeiptr uploadBytes = static_cast<GLsizeiptr>(drawVertexCount * sizeof(LegacyVertex));
             EnsureVertexBufferCapacity(uploadBytes);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBytes, &drawVertices[0]);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBytes, drawVertexData);
+            ++m_frameStats.bufferSubDataCalls;
             if (indexedQuads)
-                glDrawElements(GL_TRIANGLES, static_cast<GLsizei>((drawVertices.size() / 4) * 6), GL_UNSIGNED_INT, NULL);
+                glDrawElements(GL_TRIANGLES, static_cast<GLsizei>((drawVertexCount / 4) * 6), GL_UNSIGNED_INT, NULL);
             else
-                glDrawArrays(ToGlPrimitive(), 0, static_cast<GLsizei>(drawVertices.size()));
+                glDrawArrays(ToGlPrimitive(), 0, static_cast<GLsizei>(drawVertexCount));
             ++m_frameStats.drawCalls;
-            m_frameStats.vertices += static_cast<unsigned long long>(drawVertices.size());
+            m_frameStats.vertices += static_cast<unsigned long long>(drawVertexCount);
             m_frameStats.vertexUploadBytes += static_cast<unsigned long long>(uploadBytes);
             // Nada e desligado aqui: o VAO e o buffer sao nossos e o programa e unico.
             // Desligar so criava trabalho para o draw seguinte.
@@ -447,7 +464,7 @@ namespace
                 char report[256];
                 snprintf(report, sizeof(report),
                     "primeiro draw: prim=%d verts=%d locProj=%d locMV=%d erro=0x%04X",
-                    (int)m_primitive, (int)drawVertices.size(),
+                    (int)m_primitive, (int)drawVertexCount,
                     m_projectionLocation, m_modelViewLocation, ::glGetError());
                 Platform::LegacyRenderLog(report);
             }
@@ -465,16 +482,26 @@ namespace
         virtual void Vertex3fv(const float* vertex) { Vertex3f(vertex[0], vertex[1], vertex[2]); }
         virtual void SetMatrices(const float* projection, const float* modelView)
         {
-            FlushPendingBatch();
-            if (projection != NULL) memcpy(m_projection, projection, sizeof(m_projection));
-            if (modelView != NULL) memcpy(m_modelView, modelView, sizeof(m_modelView));
+            const bool projectionChanged = projection != NULL &&
+                memcmp(m_projection, projection, sizeof(m_projection)) != 0;
+            const bool modelViewChanged = modelView != NULL &&
+                memcmp(m_modelView, modelView, sizeof(m_modelView)) != 0;
+
+            // A matriz faz parte do estado do lote; so e uma barreira quando o
+            // proximo desenho realmente usara outra transformacao. Antes disso,
+            // SyncLegacyRenderMatrices dividia a UI mesmo ao reenviar os mesmos
+            // valores de projecao/modelview.
+            if (projectionChanged || modelViewChanged)
+                FlushPendingBatch(FlushMatrix);
+            if (projectionChanged) memcpy(m_projection, projection, sizeof(m_projection));
+            if (modelViewChanged) memcpy(m_modelView, modelView, sizeof(m_modelView));
             m_matricesSet = true;
         }
         virtual void SetDepthTest(bool enabled)
         {
             if (m_depthTestConhecido && m_depthTestEnabled == enabled)
                 return;
-            FlushPendingBatch();
+            FlushPendingBatch(FlushDepth);
             enabled ? ::glEnable(GL_DEPTH_TEST) : ::glDisable(GL_DEPTH_TEST);
             m_depthTestEnabled = enabled;
             m_depthTestConhecido = true;
@@ -482,19 +509,19 @@ namespace
         }
         virtual void SetAlphaTest(bool enabled)
         {
-            if (m_alphaTestEnabled != enabled) FlushPendingBatch();
+            if (m_alphaTestEnabled != enabled) FlushPendingBatch(FlushAlpha);
             m_alphaTestEnabled = enabled;
         }
         virtual void SetAlphaTestRef(float reference)
         {
-            if (m_alphaTestReference != reference) FlushPendingBatch();
+            if (m_alphaTestReference != reference) FlushPendingBatch(FlushAlpha);
             m_alphaTestReference = reference;
         }
         virtual void SetFog(bool enabled, const float* color, float start, float end)
         {
             if (m_fogEnabled != enabled || m_fogStart != start || m_fogEnd != end ||
                 (color != NULL && memcmp(m_fogColor, color, sizeof(m_fogColor)) != 0))
-                FlushPendingBatch();
+                FlushPendingBatch(FlushFog);
             m_fogEnabled = enabled;
             if (color != NULL)
             {
@@ -507,13 +534,13 @@ namespace
         }
         virtual void SetTexture2D(bool enabled)
         {
-            if (m_texture2DEnabled != enabled) FlushPendingBatch();
+            if (m_texture2DEnabled != enabled) FlushPendingBatch(FlushTexture);
             m_texture2DEnabled = enabled;
         }
         virtual void BindTexture(unsigned int texture)
         {
             const GLuint glTexture = static_cast<GLuint>(texture);
-            if (m_texture != glTexture) FlushPendingBatch();
+            if (m_texture != glTexture) FlushPendingBatch(FlushTexture);
             if (m_texture != glTexture)
                 ++m_frameStats.textureChanges;
             m_texture = glTexture;
@@ -522,12 +549,17 @@ namespace
         {
             if (m_blendModeEnviado == mode)
                 return;
-            FlushPendingBatch();
+            FlushPendingBatch(FlushBlend);
             m_blendModeEnviado = mode;
             ++m_frameStats.blendStateChanges;
         }
         virtual void ResetFrameStats() { m_frameStats = Platform::LegacyRenderFrameStats(); }
         virtual Platform::LegacyRenderFrameStats GetFrameStats() const { return m_frameStats; }
+        virtual void RecordTextureUpload(unsigned long long bytes)
+        {
+            ++m_frameStats.textureUploads;
+            m_frameStats.textureUploadBytes += bytes;
+        }
         virtual void InvalidateStateCache()
         {
             FlushPendingBatch();
@@ -570,10 +602,32 @@ namespace
             return primitive == Platform::LegacyPrimitiveQuads ||
                 primitive == Platform::LegacyPrimitiveTriangles;
         }
-        void FlushPendingBatch()
+        enum FlushReason
+        {
+            FlushUnknown,
+            FlushMatrix,
+            FlushTexture,
+            FlushBlend,
+            FlushDepth,
+            FlushAlpha,
+            FlushFog
+        };
+        void FlushPendingBatch(FlushReason reason = FlushUnknown)
         {
             if (m_batching && !m_vertices.empty())
+            {
+                switch (reason)
+                {
+                case FlushMatrix: ++m_frameStats.matrixFlushes; break;
+                case FlushTexture: ++m_frameStats.textureFlushes; break;
+                case FlushBlend: ++m_frameStats.blendFlushes; break;
+                case FlushDepth: ++m_frameStats.depthFlushes; break;
+                case FlushAlpha: ++m_frameStats.alphaFlushes; break;
+                case FlushFog: ++m_frameStats.fogFlushes; break;
+                default: break;
+                }
                 Flush();
+            }
         }
         static void SetIdentity(float* matrix)
         {
@@ -615,6 +669,7 @@ namespace
             while (newCapacity < requiredBytes)
                 newCapacity *= 2;
             glBufferData(GL_ARRAY_BUFFER, newCapacity, NULL, GL_STREAM_DRAW);
+            ++m_frameStats.bufferDataCalls;
             m_vertexBufferCapacity = newCapacity;
         }
         void EnsureQuadIndexCapacity(size_t requiredQuads)
@@ -640,6 +695,7 @@ namespace
             }
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_quadIndexBuffer);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices.size() * sizeof(GLuint)), &indices[0], GL_STATIC_DRAW);
+            ++m_frameStats.bufferDataCalls;
             m_quadIndexCapacity = newCapacity;
         }
         GLenum ToGlPrimitive() const
@@ -758,6 +814,7 @@ namespace
         // Alias para o buffer de vertices da fila; mantem o restante do
         // adaptador agnostico da representacao da UiDrawList.
         std::vector<LegacyVertex>& m_vertices;
+        std::vector<LegacyVertex> m_drawVertices;
         LegacyVertex m_current;
         GLuint m_program;
         GLuint m_vertexBuffer;

@@ -7228,6 +7228,7 @@ void RenderJoints(BYTE bRenderOneMore)
                         vec3_t t_bias;
                         VectorSubtract(o->Target->Position, o->StartPosition, t_bias);
                         glMatrixMode(GL_MODELVIEW);
+                        PushLegacyRenderMatrixSnapshot();
                         glPushMatrix();
                         glTranslatef(t_bias[0], t_bias[1], t_bias[2]);
                         // O adapter usa matrizes proprias: sincroniza a modelview transladada.
@@ -7246,7 +7247,7 @@ void RenderJoints(BYTE bRenderOneMore)
                         renderer.End();
 
                         glPopMatrix();
-                        SyncLegacyRenderMatrices();
+                        PopLegacyRenderMatrixSnapshot();
                         continue;
                     }
 #endif //GUILD_WAR_EVENT

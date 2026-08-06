@@ -45,6 +45,7 @@ namespace
     #else
     Platform::ILegacyRenderAdapter* g_LegacyRenderAdapter = NULL;
     #endif
+    bool g_GlslLegacyBackendEnabled = false;
 }
 
 namespace
@@ -84,6 +85,12 @@ Platform::LegacyRenderFrameStats Platform::GetLegacyRenderFrameStats()
         : LegacyRenderFrameStats();
 }
 
+void Platform::RecordLegacyTextureUpload(unsigned long long bytes)
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->RecordTextureUpload(bytes);
+}
+
 void Platform::InvalidateLegacyRenderStateCache()
 {
     if (g_LegacyRenderAdapter != NULL)
@@ -94,6 +101,7 @@ Platform::ILegacyRenderAdapter& Platform::GetLegacyRenderAdapter() { return *g_L
 void Platform::SetLegacyRenderAdapter(ILegacyRenderAdapter* adapter)
 {
     g_LegacyRenderAdapter = adapter;
+    g_GlslLegacyBackendEnabled = false;
 }
 
 void Platform::EnableGlslLegacyBackend(bool enabled)
@@ -104,14 +112,23 @@ void Platform::EnableGlslLegacyBackend(bool enabled)
         if (glslAdapter == NULL)
             glslAdapter = Platform::CreateGlslLegacyRenderAdapter();
         if (glslAdapter != NULL)
+        {
             g_LegacyRenderAdapter = glslAdapter;
+            g_GlslLegacyBackendEnabled = true;
+        }
     }
     else
     {
+        g_GlslLegacyBackendEnabled = false;
         #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
         g_LegacyRenderAdapter = &g_FixedFunctionAdapter;
         #else
         g_LegacyRenderAdapter = NULL;
         #endif
     }
+}
+
+bool Platform::IsGlslLegacyBackendEnabled()
+{
+    return g_GlslLegacyBackendEnabled;
 }

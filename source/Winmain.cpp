@@ -966,6 +966,10 @@ bool CreateOpenglWindow()
 	config.colorBits = 16;
 	config.depthBits = 16;
 	config.doubleBuffered = true;
+	// O adaptador GLSL e o caminho padrao em todas as plataformas. O renderizador
+	// fixo fica disponivel somente como rota de comparacao/recuperacao no PC.
+	// -glslrenderer continua aceito por compatibilidade com atalhos antigos.
+	config.enableShaderBackend = (::strstr(::GetCommandLineA(), "-fixedrenderer") == NULL);
 
 	if (!Platform::GetRenderContext().Create(config))
 	{
@@ -977,6 +981,7 @@ bool CreateOpenglWindow()
 
 	g_hDC = static_cast<HDC>(Platform::GetRenderContext().GetNativeDeviceContext());
 	g_hRC = static_cast<HGLRC>(Platform::GetRenderContext().GetNativeRenderContext());
+	g_ErrorReport.Write("OpenGL renderer: %s\r\n", config.enableShaderBackend ? "GLSL legacy adapter" : "fixed-function comparison fallback");
 
 	ShowWindow(g_hWnd,SW_SHOW);
 	SetForegroundWindow(g_hWnd);
