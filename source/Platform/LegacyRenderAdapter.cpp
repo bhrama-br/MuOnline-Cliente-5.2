@@ -47,7 +47,31 @@ namespace
     #endif
     bool g_GlslLegacyBackendEnabled = false;
     Platform::GpuSkinningMode g_GpuSkinningMode = Platform::GpuSkinningOn;
+    Platform::GpuSkinningDeployment g_GpuSkinningDeployment = Platform::GpuSkinningQA;
     unsigned long g_GpuSkinningFrame = 0;
+    char g_GpuSkinningModelWhitelist[512] = { 0 };
+
+    bool IsWhitelistedGpuSkinningModel(int modelId)
+    {
+        if (modelId < 0 || g_GpuSkinningModelWhitelist[0] == 0)
+            return false;
+        const char* entry = g_GpuSkinningModelWhitelist;
+        while (*entry != 0)
+        {
+            while (*entry == ',' || *entry == ' ' || *entry == '\t') ++entry;
+            char* end = NULL;
+            const long candidate = strtol(entry, &end, 10);
+            if (end == entry)
+            {
+                while (*entry != 0 && *entry != ',') ++entry;
+                continue;
+            }
+            if (candidate == modelId) return true;
+            entry = end;
+            while (*entry != 0 && *entry != ',') ++entry;
+        }
+        return false;
+    }
 }
 
 namespace
@@ -149,9 +173,23 @@ bool Platform::IsGlslLegacyBackendEnabled()
 
 void Platform::SetGpuSkinningMode(GpuSkinningMode mode) { g_GpuSkinningMode = mode; }
 Platform::GpuSkinningMode Platform::GetGpuSkinningMode() { return g_GpuSkinningMode; }
+void Platform::SetGpuSkinningDeployment(GpuSkinningDeployment deployment) { g_GpuSkinningDeployment = deployment; }
+Platform::GpuSkinningDeployment Platform::GetGpuSkinningDeployment() { return g_GpuSkinningDeployment; }
+void Platform::SetGpuSkinningModelWhitelist(const char* modelIds)
+{
+    if (modelIds == NULL) { g_GpuSkinningModelWhitelist[0] = 0; return; }
+    strncpy(g_GpuSkinningModelWhitelist, modelIds, sizeof(g_GpuSkinningModelWhitelist) - 1);
+    g_GpuSkinningModelWhitelist[sizeof(g_GpuSkinningModelWhitelist) - 1] = 0;
+}
 void Platform::BeginGpuSkinningFrame() { ++g_GpuSkinningFrame; }
 bool Platform::ShouldUseGpuSkinning()
 {
     if (g_GpuSkinningMode == GpuSkinningOff) return false;
     return g_GpuSkinningMode == GpuSkinningOn || (g_GpuSkinningFrame & 1UL) == 0;
+}
+bool Platform::ShouldUseGpuSkinningForModel(int modelId)
+{
+    if (!ShouldUseGpuSkinning()) return false;
+    return g_GpuSkinningDeployment != GpuSkinningProductionWhitelist ||
+        IsWhitelistedGpuSkinningModel(modelId);
 }

@@ -3024,12 +3024,43 @@ void RenderScene(HDC hDC)
     // SwapBuffers, GetLegacyRenderFrameStats() contem exatamente o frame que
     // acabou de ser apresentado, pronto para o futuro overlay/CSV.
     Platform::ResetLegacyRenderFrameStats();
-    if (::strstr(::GetCommandLineA(), "-gpuskinning=off") != NULL)
-        Platform::SetGpuSkinningMode(Platform::GpuSkinningOff);
-    else if (::strstr(::GetCommandLineA(), "-gpuskinning=compare") != NULL)
-        Platform::SetGpuSkinningMode(Platform::GpuSkinningCompare);
+    const char* commandLine = ::GetCommandLineA();
+    const char* whitelistArgument = ::strstr(commandLine, "-gpuskinning-models=");
+    if (whitelistArgument != NULL)
+    {
+        whitelistArgument += strlen("-gpuskinning-models=");
+        char whitelist[512]; size_t length = 0;
+        while (whitelistArgument[length] != 0 && whitelistArgument[length] != ' ' && whitelistArgument[length] != '\t' && length + 1 < sizeof(whitelist)) ++length;
+        memcpy(whitelist, whitelistArgument, length); whitelist[length] = 0;
+        Platform::SetGpuSkinningModelWhitelist(whitelist);
+    }
     else
+        Platform::SetGpuSkinningModelWhitelist(NULL);
+    if (::strstr(commandLine, "-gpuskinning=off") != NULL)
+    {
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningOff);
+        Platform::SetGpuSkinningDeployment(Platform::GpuSkinningQA);
+    }
+    else if (::strstr(commandLine, "-gpuskinning=dev") != NULL || ::strstr(commandLine, "-gpuskinning=compare") != NULL)
+    {
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningCompare);
+        Platform::SetGpuSkinningDeployment(Platform::GpuSkinningDevelopment);
+    }
+    else if (::strstr(commandLine, "-gpuskinning=production") != NULL)
+    {
         Platform::SetGpuSkinningMode(Platform::GpuSkinningOn);
+        Platform::SetGpuSkinningDeployment(Platform::GpuSkinningProductionWhitelist);
+    }
+    else if (::strstr(commandLine, "-gpuskinning=on") != NULL)
+    {
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningOn);
+        Platform::SetGpuSkinningDeployment(Platform::GpuSkinningProductionDefault);
+    }
+    else
+    {
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningOn);
+        Platform::SetGpuSkinningDeployment(Platform::GpuSkinningQA);
+    }
     Platform::BeginGpuSkinningFrame();
 	g_renderStatsStart = GetTickCount();
     CalcFPS();

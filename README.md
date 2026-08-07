@@ -128,3 +128,9 @@ Para uma reconfiguração Web completa, remova somente o conteúdo gerado de `bu
 - Faça alterações em `source/` ou `web/` e compile o alvo afetado.
 - Para mudanças compartilhadas de UI, rede ou inventário, teste PC e Web.
 - Se o navegador mantiver uma versão anterior, faça recarregamento forçado (`Ctrl+F5`) e confirme a data dos arquivos em `build-web/`.
+
+
+- Desenvolvimento: -gpuskinning=dev ou compare alterna CPU/GPU por frame.
+  - QA: sem flag, GPU ativa para modelos elegíveis com fallback CPU.
+  - Produção gradual: -gpuskinning=production -gpuskinning-models=ID1,ID2.
+  - Produção padrão: -gpuskinning=on.

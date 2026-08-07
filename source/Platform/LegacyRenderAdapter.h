@@ -83,6 +83,16 @@ namespace Platform
         GpuSkinningCompare
     };
 
+    // Politica de rollout independente do modo de comparacao. Em producao a
+    // GPU e liberada apenas para os IDs explicitamente autorizados.
+    enum GpuSkinningDeployment
+    {
+        GpuSkinningDevelopment,
+        GpuSkinningQA,
+        GpuSkinningProductionWhitelist,
+        GpuSkinningProductionDefault
+    };
+
     class ILegacyRenderAdapter
     {
     public:
@@ -145,8 +155,14 @@ namespace Platform
     bool IsGlslLegacyBackendEnabled();
     void SetGpuSkinningMode(GpuSkinningMode mode);
     GpuSkinningMode GetGpuSkinningMode();
+    void SetGpuSkinningDeployment(GpuSkinningDeployment deployment);
+    GpuSkinningDeployment GetGpuSkinningDeployment();
+    // Lista separada por virgulas de IDs de Models[]; NULL/vazia nao libera
+    // modelos quando o deployment e ProductionWhitelist.
+    void SetGpuSkinningModelWhitelist(const char* modelIds);
     void BeginGpuSkinningFrame();
     bool ShouldUseGpuSkinning();
+    bool ShouldUseGpuSkinningForModel(int modelId);
 
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();

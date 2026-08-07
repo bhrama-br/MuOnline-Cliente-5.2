@@ -320,7 +320,8 @@ void BMD::PrepareGpuRender(float(*BoneMatrix)[3][4], bool Translate, float _Scal
 
 bool BMD::CanRenderBodyWithGpu(int renderFlags, float alpha, int blendMesh, float blendU, float blendV, int hiddenMesh, int explicitTexture) const
 {
-    if (!Platform::IsGlslLegacyBackendEnabled() || !Platform::ShouldUseGpuSkinning() || alpha < 0.99f ||
+    const int modelId = (Models != NULL && this >= Models && this < Models + MAX_MODELS) ? static_cast<int>(this - Models) : -1;
+    if (!Platform::IsGlslLegacyBackendEnabled() || !Platform::ShouldUseGpuSkinningForModel(modelId) || alpha < 0.99f ||
         blendU != 0.f || blendV != 0.f || GpuBoneMatrices == NULL || GpuBoneMatrixCount <= 0 || GpuBoneMatrixCount > 200) return false;
     const int supported = RENDER_TEXTURE | RENDER_BRIGHT | RENDER_DARK | RENDER_NODEPTH | RENDER_WAVE |
         RENDER_CHROME | RENDER_CHROME2 | RENDER_METAL | RENDER_OIL | RENDER_SHADOWMAP | RENDER_LIGHTMAP;
@@ -1219,7 +1220,8 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     // dos 200 ossos. Modelos acima disso mantem o caminho CPU ate haver
     // divisao por paleta/submalha.
     const bool gpuPaletteSupported = GpuBoneMatrixCount <= 200;
-    const bool staticGpuCandidate = Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinning()
+    const int modelId = (Models != NULL && this >= Models && this < Models + MAX_MODELS) ? static_cast<int>(this - Models) : -1;
+    const bool staticGpuCandidate = Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinningForModel(modelId)
         && GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0 && gpuPaletteSupported
         && ((renderFlags & RENDER_TEXTURE) != 0 || gpuMaterialEffect != 0 || gpuUntexturedBright)
         && (renderFlags & ~gpuSupportedMaterialFlags) == 0 && alpha >= 0.99f
@@ -1267,7 +1269,7 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
                 return;
         }
     }
-    if (Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinning() &&
+    if (Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinningForModel(modelId) &&
         GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0)
     {
         Platform::RecordGpuSkinningFallback(!gpuPaletteSupported || (staticGpuCandidate && !gpuMeshPrepared)
