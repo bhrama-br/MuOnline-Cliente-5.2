@@ -1,7 +1,21 @@
 #include "stdafx.h"
 
-// NAO inclui LegacyMatrixMirror.h: as macros de la reescreveriam justamente as
-// chamadas reais do GL que este arquivo precisa fazer.
+// stdafx.h inclui LegacyMatrixMirror.h no fim, entao as macros chegam aqui por
+// via transitiva mesmo sem este arquivo pedi-las. Sem os #undef abaixo,
+// `::glMatrixMode(mode)` vira `::Platform::MirrorMatrixMode(mode)` e cada
+// wrapper chama a si mesmo: estouro de pilha na primeira operacao de matriz.
+#undef glMatrixMode
+#undef glPushMatrix
+#undef glPopMatrix
+#undef glLoadIdentity
+#undef glLoadMatrixf
+#undef glMultMatrixf
+#undef glTranslatef
+#undef glRotatef
+#undef glScalef
+#undef gluPerspective
+#undef gluOrtho2D
+
 #include "LegacyMatrixStack.h"
 
 #ifdef _WIN32
@@ -86,6 +100,13 @@ namespace Platform
     {
         ::gluPerspective(fieldOfViewDegrees, aspect, nearPlane, farPlane);
         LegacyPerspective(fieldOfViewDegrees, aspect, nearPlane, farPlane);
+    }
+
+    void MirrorOrtho2D(float left, float right, float bottom, float top)
+    {
+        ::gluOrtho2D(left, right, bottom, top);
+        // gluOrtho2D e glOrtho com near/far em -1..1.
+        LegacyOrtho(left, right, bottom, top, -1.f, 1.f);
     }
 
     const float* MirrorGetProjection() { return LegacyGetMatrix(LegacyMatrixProjection); }

@@ -22,8 +22,12 @@
 //
 // As macros sao objeto, nao funcao, e o codigo nao usa nenhuma destas com
 // qualificacao `::gl...` nem toma o endereco delas — verificado antes de
-// introduzi-las. LegacyMatrixMirror.cpp nao inclui este cabecalho, para poder
-// chamar as funcoes reais do GL.
+// introduzi-las.
+//
+// ATENCAO: este cabecalho e incluido pelo stdafx.h, logo chega em TODO arquivo
+// do projeto, inclusive em LegacyMatrixMirror.cpp. La as macros sao desfeitas
+// com #undef; sem isso cada wrapper chamaria a si mesmo. Qualquer outro arquivo
+// que precise da funcao real do GL tem que fazer o mesmo.
 
 #ifdef _WIN32
 
@@ -39,6 +43,9 @@ namespace Platform
     void MirrorRotatef(float degrees, float x, float y, float z);
     void MirrorScalef(float x, float y, float z);
     void MirrorPerspective(float fieldOfViewDegrees, float aspect, float nearPlane, float farPlane);
+    // gluOrtho2D instala a projecao da UI em BeginBitmap. Sem espelha-la, o
+    // espelho ficaria com a perspectiva enquanto o GL usa a ortografica.
+    void MirrorOrtho2D(float left, float right, float bottom, float top);
 
     // Projecao e modelview correntes segundo o espelho, no layout coluna-maior
     // do GL. Substituem o par de glGetFloatv.
@@ -59,5 +66,6 @@ namespace Platform
 #define glRotatef      Platform::MirrorRotatef
 #define glScalef       Platform::MirrorScalef
 #define gluPerspective Platform::MirrorPerspective
+#define gluOrtho2D     Platform::MirrorOrtho2D
 
 #endif // _WIN32
