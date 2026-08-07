@@ -251,13 +251,19 @@ namespace
 	};
 }
 
+// Definida adiante: GetOpenGLMatrix aparece antes dela no arquivo. So Windows:
+// no alvo Web as matrizes ja vem da pilha em CPU, sem readback nenhum.
+#ifdef _WIN32
+static void ReadLegacyMatrices(float* projection, float* modelView);
+#endif
+
 void GetOpenGLMatrix(float Matrix[3][4])
 {
 	float OpenGLMatrix[16];
 #ifdef _WIN32
 	{
-		ScopedMatrixReadbackTimer timer;
-		glGetFloatv(GL_MODELVIEW_MATRIX,OpenGLMatrix);
+		float descartaProjecao[16];
+		ReadLegacyMatrices(descartaProjecao, OpenGLMatrix);
 	}
 #else
 	// GLES3 nao tem pilha de matrizes nem GL_MODELVIEW_MATRIX; a leitura vinha
@@ -277,43 +283,62 @@ void GetOpenGLMatrix(float Matrix[3][4])
 // BeginOpengl precisa tanto da matriz para CameraMatrix quanto para o adapter
 // GLSL. No Windows ambas vinham de glGetFloatv separadamente; fazer a copia a
 // partir da mesma leitura evita uma consulta sincrona extra ao driver por passe.
-// Recalcula na CPU exatamente a sequencia que BeginOpengl acabou de aplicar ao
-// GL. Nao depende de estado anterior: comeca em identidade, como o proprio
-// BeginOpengl faz depois do glPushMatrix. A matematica e a mesma que o alvo Web
-// ja usa em producao, entao nao e codigo novo e sim codigo que o PC nunca
-// compilou.
-static void ComputeCameraMatricesOnCpu(float aspectWidth, float aspectHeight,
-	float* projection, float* modelView)
-{
-	Platform::LegacySetMatrixMode(Platform::LegacyMatrixProjection);
-	Platform::LegacyLoadIdentity();
-	Platform::LegacyPerspective(CameraFOV, aspectWidth / aspectHeight, CameraViewNear, CameraViewFar * 1.4f);
-	memcpy(projection, Platform::LegacyGetMatrix(Platform::LegacyMatrixProjection), sizeof(float) * 16);
-
-	Platform::LegacySetMatrixMode(Platform::LegacyMatrixModelView);
-	Platform::LegacyLoadIdentity();
-	Platform::LegacyRotate(CameraAngle[1], 0.f, 1.f, 0.f);
-	if (CameraTopViewEnable == false)
-		Platform::LegacyRotate(CameraAngle[0], 1.f, 0.f, 0.f);
-	Platform::LegacyRotate(CameraAngle[2], 0.f, 0.f, 1.f);
-	Platform::LegacyTranslate(-CameraPosition[0], -CameraPosition[1], -CameraPosition[2]);
-	memcpy(modelView, Platform::LegacyGetMatrix(Platform::LegacyMatrixModelView), sizeof(float) * 16);
-}
-
-// Divergencia maxima entre o calculo em CPU e a leitura do driver, no modo
-// compare. Vale zero quando nunca divergiram.
+// Divergencia maxima (relativa) entre o espelho em CPU e a leitura do driver, no
+// modo compare. Vale zero quando nunca divergiram.
 float g_cpuMatrixMaxDivergence = 0.f;
+
+// Fonte unica das matrizes para todo o cliente.
+//
+// Com o espelho ligado nao ha glGetFloatv nenhum: as matrizes vem da pilha em
+// CPU que MirrorXxx mantem em paralelo ao GL. Em compare le dos dois e registra
+// a divergencia relativa — uma matriz errada nao pisca, ela desloca geometria
+// sutilmente, e so um numero pega isso.
+#ifdef _WIN32
+static void ReadLegacyMatrices(float* projection, float* modelView)
+{
+	const Platform::RenderFeatureMode mode =
+		Platform::GetRenderFeatureMode(Platform::RenderFeatureCpuMatrices);
+	// MirrorIsPrimed protege o intervalo entre o inicio do processo e a primeira
+	// operacao de matriz, quando o espelho ainda nao descreve nada.
+	if (mode != Platform::RenderFeatureDisabled && Platform::MirrorIsPrimed())
+	{
+		memcpy(projection, Platform::MirrorGetProjection(), sizeof(float) * 16);
+		memcpy(modelView, Platform::MirrorGetModelView(), sizeof(float) * 16);
+
+		if (mode == Platform::RenderFeatureCompare)
+		{
+			float glProjection[16];
+			float glModelView[16];
+			{
+				ScopedMatrixReadbackTimer timer;
+				glGetFloatv(GL_PROJECTION_MATRIX, glProjection);
+				glGetFloatv(GL_MODELVIEW_MATRIX, glModelView);
+			}
+			for (int i = 0; i < 16; ++i)
+			{
+				const float escalaP = fabsf(glProjection[i]) > 1.f ? fabsf(glProjection[i]) : 1.f;
+				const float escalaM = fabsf(glModelView[i]) > 1.f ? fabsf(glModelView[i]) : 1.f;
+				const float dp = fabsf(glProjection[i] - projection[i]) / escalaP;
+				const float dm = fabsf(glModelView[i] - modelView[i]) / escalaM;
+				if (dp > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dp;
+				if (dm > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dm;
+			}
+		}
+		return;
+	}
+
+	ScopedMatrixReadbackTimer timer;
+	glGetFloatv(GL_PROJECTION_MATRIX, projection);
+	glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+}
+#endif // _WIN32
 
 void SyncLegacyRenderMatricesAndCamera(float cameraMatrix[3][4])
 {
 #ifdef _WIN32
 	float projection[16];
 	float modelView[16];
-	{
-		ScopedMatrixReadbackTimer timer;
-		glGetFloatv(GL_PROJECTION_MATRIX, projection);
-		glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
-	}
+	ReadLegacyMatrices(projection, modelView);
 	Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
 	RememberLegacy3DMatrices(projection, modelView);
 
@@ -942,57 +967,6 @@ void BeginOpengl(int x,int y,int Width,int Height )
 		SetLegacyFog(false);
 	}
 
-    // BeginOpengl e o unico sitio onde a sequencia de matrizes e integralmente
-    // conhecida (LoadIdentity + perspectiva + tres rotacoes + translacao), entao
-    // e o unico onde o valor pode ser recalculado em vez de lido do driver. Os
-    // demais SyncLegacyRenderMatrices vem depois de manipulacoes arbitrarias em
-    // codigo de efeito e continuam com o readback.
-#ifdef _WIN32
-    const Platform::RenderFeatureMode cpuMatrixMode =
-        Platform::GetRenderFeatureMode(Platform::RenderFeatureCpuMatrices);
-    if (cpuMatrixMode != Platform::RenderFeatureDisabled)
-    {
-        float cpuProjection[16];
-        float cpuModelView[16];
-        ComputeCameraMatricesOnCpu((float)Width, (float)Height, cpuProjection, cpuModelView);
-
-        if (cpuMatrixMode == Platform::RenderFeatureCompare)
-        {
-            // Compare aqui nao alterna por frame: faz as duas coisas e mede a
-            // diferenca. Uma divergencia de matriz nao produz cintilacao obvia,
-            // produz geometria sutilmente errada — um numero e mais confiavel
-            // que o olho.
-            float glProjection[16];
-            float glModelView[16];
-            {
-                ScopedMatrixReadbackTimer timer;
-                glGetFloatv(GL_PROJECTION_MATRIX, glProjection);
-                glGetFloatv(GL_MODELVIEW_MATRIX, glModelView);
-            }
-            // Relativa, nao absoluta. A entrada de profundidade da projecao vale
-            // centenas quando o far plane e grande: um erro absoluto de 1e-3 ali
-            // e ruido de float, enquanto o mesmo 1e-3 numa entrada de rotacao
-            // (modulo <= 1) seria um defeito real. O numero so e interpretavel
-            // depois de dividido pela escala da entrada.
-            for (int i = 0; i < 16; ++i)
-            {
-                const float escalaP = fabsf(glProjection[i]) > 1.f ? fabsf(glProjection[i]) : 1.f;
-                const float escalaM = fabsf(glModelView[i]) > 1.f ? fabsf(glModelView[i]) : 1.f;
-                const float dp = fabsf(glProjection[i] - cpuProjection[i]) / escalaP;
-                const float dm = fabsf(glModelView[i] - cpuModelView[i]) / escalaM;
-                if (dp > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dp;
-                if (dm > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dm;
-            }
-        }
-
-        Platform::GetLegacyRenderAdapter().SetMatrices(cpuProjection, cpuModelView);
-        RememberLegacy3DMatrices(cpuProjection, cpuModelView);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 4; ++j)
-                CameraMatrix[i][j] = cpuModelView[j * 4 + i];
-        return;
-    }
-#endif
     SyncLegacyRenderMatricesAndCamera(CameraMatrix);
 }
 
@@ -1090,11 +1064,7 @@ void SyncLegacyRenderMatrices()
     // No PC as matrizes seguem vivendo na pilha do OpenGL.
     float projection[16];
     float modelView[16];
-    {
-        ScopedMatrixReadbackTimer timer;
-        glGetFloatv(GL_PROJECTION_MATRIX, projection);
-        glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
-    }
+    ReadLegacyMatrices(projection, modelView);
     Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
     RememberLegacy3DMatrices(projection, modelView);
 #else

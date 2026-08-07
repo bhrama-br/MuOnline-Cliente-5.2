@@ -115,3 +115,8 @@
 #include "Widescreen.h"
 #include "Protect.h"
 #include "ItemManager.h"
+
+// Por ultimo, e de proposito: este cabecalho define macros com os nomes das
+// funcoes de matriz do GL. Vindo depois de todos os includes, ele reescreve as
+// CHAMADAS do cliente sem tocar nas DECLARACOES do <GL/gl.h>.
+#include "Platform/LegacyMatrixMirror.h"
