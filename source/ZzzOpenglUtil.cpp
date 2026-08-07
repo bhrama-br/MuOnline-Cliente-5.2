@@ -13,6 +13,7 @@
 #include "Zzzinfomation.h"
 #include "NewUISystem.h"
 #include "Platform/LegacyRenderAdapter.h"
+#include "Platform/LegacyMatrixStack.h"
 #include "Platform/RenderPipeline.h"
 #include "Platform/PlatformShell.h"
 
@@ -276,6 +277,33 @@ void GetOpenGLMatrix(float Matrix[3][4])
 // BeginOpengl precisa tanto da matriz para CameraMatrix quanto para o adapter
 // GLSL. No Windows ambas vinham de glGetFloatv separadamente; fazer a copia a
 // partir da mesma leitura evita uma consulta sincrona extra ao driver por passe.
+// Recalcula na CPU exatamente a sequencia que BeginOpengl acabou de aplicar ao
+// GL. Nao depende de estado anterior: comeca em identidade, como o proprio
+// BeginOpengl faz depois do glPushMatrix. A matematica e a mesma que o alvo Web
+// ja usa em producao, entao nao e codigo novo e sim codigo que o PC nunca
+// compilou.
+static void ComputeCameraMatricesOnCpu(float aspectWidth, float aspectHeight,
+	float* projection, float* modelView)
+{
+	Platform::LegacySetMatrixMode(Platform::LegacyMatrixProjection);
+	Platform::LegacyLoadIdentity();
+	Platform::LegacyPerspective(CameraFOV, aspectWidth / aspectHeight, CameraViewNear, CameraViewFar * 1.4f);
+	memcpy(projection, Platform::LegacyGetMatrix(Platform::LegacyMatrixProjection), sizeof(float) * 16);
+
+	Platform::LegacySetMatrixMode(Platform::LegacyMatrixModelView);
+	Platform::LegacyLoadIdentity();
+	Platform::LegacyRotate(CameraAngle[1], 0.f, 1.f, 0.f);
+	if (CameraTopViewEnable == false)
+		Platform::LegacyRotate(CameraAngle[0], 1.f, 0.f, 0.f);
+	Platform::LegacyRotate(CameraAngle[2], 0.f, 0.f, 1.f);
+	Platform::LegacyTranslate(-CameraPosition[0], -CameraPosition[1], -CameraPosition[2]);
+	memcpy(modelView, Platform::LegacyGetMatrix(Platform::LegacyMatrixModelView), sizeof(float) * 16);
+}
+
+// Divergencia maxima entre o calculo em CPU e a leitura do driver, no modo
+// compare. Vale zero quando nunca divergiram.
+float g_cpuMatrixMaxDivergence = 0.f;
+
 void SyncLegacyRenderMatricesAndCamera(float cameraMatrix[3][4])
 {
 #ifdef _WIN32
@@ -914,6 +942,50 @@ void BeginOpengl(int x,int y,int Width,int Height )
 		SetLegacyFog(false);
 	}
 
+    // BeginOpengl e o unico sitio onde a sequencia de matrizes e integralmente
+    // conhecida (LoadIdentity + perspectiva + tres rotacoes + translacao), entao
+    // e o unico onde o valor pode ser recalculado em vez de lido do driver. Os
+    // demais SyncLegacyRenderMatrices vem depois de manipulacoes arbitrarias em
+    // codigo de efeito e continuam com o readback.
+#ifdef _WIN32
+    const Platform::RenderFeatureMode cpuMatrixMode =
+        Platform::GetRenderFeatureMode(Platform::RenderFeatureCpuMatrices);
+    if (cpuMatrixMode != Platform::RenderFeatureDisabled)
+    {
+        float cpuProjection[16];
+        float cpuModelView[16];
+        ComputeCameraMatricesOnCpu((float)Width, (float)Height, cpuProjection, cpuModelView);
+
+        if (cpuMatrixMode == Platform::RenderFeatureCompare)
+        {
+            // Compare aqui nao alterna por frame: faz as duas coisas e mede a
+            // diferenca. Uma divergencia de matriz nao produz cintilacao obvia,
+            // produz geometria sutilmente errada — um numero e mais confiavel
+            // que o olho.
+            float glProjection[16];
+            float glModelView[16];
+            {
+                ScopedMatrixReadbackTimer timer;
+                glGetFloatv(GL_PROJECTION_MATRIX, glProjection);
+                glGetFloatv(GL_MODELVIEW_MATRIX, glModelView);
+            }
+            for (int i = 0; i < 16; ++i)
+            {
+                const float dp = fabsf(glProjection[i] - cpuProjection[i]);
+                const float dm = fabsf(glModelView[i] - cpuModelView[i]);
+                if (dp > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dp;
+                if (dm > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dm;
+            }
+        }
+
+        Platform::GetLegacyRenderAdapter().SetMatrices(cpuProjection, cpuModelView);
+        RememberLegacy3DMatrices(cpuProjection, cpuModelView);
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 4; ++j)
+                CameraMatrix[i][j] = cpuModelView[j * 4 + i];
+        return;
+    }
+#endif
     SyncLegacyRenderMatricesAndCamera(CameraMatrix);
 }
 

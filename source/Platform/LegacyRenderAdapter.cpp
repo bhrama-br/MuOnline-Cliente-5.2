@@ -58,7 +58,8 @@ namespace
         Platform::RenderFeatureDisabled,  // RenderFeatureInstancing
         Platform::RenderFeatureDisabled,  // RenderFeatureStaticTransformCache
         Platform::RenderFeatureDisabled,  // RenderFeatureBatching
-        Platform::RenderFeatureEnabled    // RenderFeatureMeshCache
+        Platform::RenderFeatureEnabled,   // RenderFeatureMeshCache
+        Platform::RenderFeatureDisabled   // RenderFeatureCpuMatrices
     };
 
     char g_InstancingModelWhitelist[512] = { 0 };

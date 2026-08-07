@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "LegacyMatrixStack.h"
 #include "LegacyRenderAdapter.h"
 

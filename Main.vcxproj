@@ -474,6 +474,7 @@
     <ClCompile Include="source\Platform\LegacyRenderAdapter.cpp" />
     <ClCompile Include="source\Platform\GlslLegacyRenderAdapter.cpp" />
     <ClCompile Include="source\Platform\RenderPipeline.cpp" />
+    <ClCompile Include="source\Platform\LegacyMatrixStack.cpp" />
     <ClCompile Include="source\Platform\LegacyFileAccess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

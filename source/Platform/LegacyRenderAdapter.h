@@ -303,6 +303,11 @@ namespace Platform
         // que nasce ligada: ela ja estava em producao sem chave de desligamento,
         // e o interruptor existe para poder desligar em campo, nao para liberar.
         RenderFeatureMeshCache,
+        // Calcula projecao e modelview na CPU em vez de le-las do driver com
+        // glGetFloatv. A medicao atribuiu 4.129 us por frame — 52% — a seis
+        // dessas consultas sincronas, a 688 us cada: cada uma drena o pipeline e
+        // impede CPU e GPU de se sobreporem.
+        RenderFeatureCpuMatrices,
         RenderFeatureCount
     };
 

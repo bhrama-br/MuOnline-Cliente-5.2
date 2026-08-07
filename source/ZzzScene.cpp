@@ -123,6 +123,9 @@ static long long g_renderPhaseUs[RenderPhaseCount] = { 0 };
 // Elas drenam o pipeline do driver e sao o principal suspeito do custo de setup.
 extern unsigned long long g_matrixReadbackUs;
 extern unsigned long long g_matrixReadbackCalls;
+// Maior diferenca observada entre a matriz calculada na CPU e a lida do
+// driver, em -cpumatrices=compare. Deve ficar na casa do epsilon de float.
+extern float g_cpuMatrixMaxDivergence;
 
 struct ScopedRenderPhase
 {
@@ -3159,7 +3162,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 	{
 		fseek(file, 0, SEEK_END);
 		if (ftell(file) == 0)
-			fprintf(file, "scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_unmeasured,us_matrix_readback,matrix_readback_calls\n");
+			fprintf(file, "scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_unmeasured,us_matrix_readback,matrix_readback_calls,cpu_matrix_divergence\n");
 		const char* skinningMode = Platform::GetGpuSkinningMode() == Platform::GpuSkinningOff ? "off" :
 			(Platform::GetGpuSkinningMode() == Platform::GpuSkinningCompare ? "compare" : "on");
 		// Coluna explicita para o que ainda escapa das fases. Calcular aqui evita
@@ -3168,7 +3171,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		for (int i = 0; i < RenderPhaseCount; ++i)
 			medidoRestante -= static_cast<double>(state.phaseUs[i]);
 		if (medidoRestante < 0.0) medidoRestante = 0.0;
-		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.6f\n",
 			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode,
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureInstancing),
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureStaticTransformCache),
@@ -3193,7 +3196,8 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			state.phaseUs[RenderPhaseSelect] / 120.0, state.phaseUs[RenderPhaseSetup] / 120.0,
 			state.phaseUs[RenderPhaseFrustum] / 120.0,
 			state.phaseUs[RenderPhaseMisc] / 120.0, medidoRestante / 120.0,
-			state.matrixReadbackUs / 120.0, state.matrixReadbackCalls / 120.0);
+			state.matrixReadbackUs / 120.0, state.matrixReadbackCalls / 120.0,
+			g_cpuMatrixMaxDivergence);
 		fclose(file);
 	}
 	state = CaptureState();
@@ -3247,6 +3251,7 @@ void RenderScene(HDC hDC)
     ParseRenderFeatureFlag(commandLine, "-statictransformcache=", Platform::RenderFeatureStaticTransformCache);
     ParseRenderFeatureFlag(commandLine, "-batching=", Platform::RenderFeatureBatching);
     ParseRenderFeatureFlag(commandLine, "-meshcache=", Platform::RenderFeatureMeshCache);
+    ParseRenderFeatureFlag(commandLine, "-cpumatrices=", Platform::RenderFeatureCpuMatrices);
     ParseModelListFlag(commandLine, "-instancing-models=", &Platform::SetInstancingModelWhitelist);
     Platform::BeginGpuSkinningFrame();
 	g_renderStatsStart = RenderStatsNowMicroseconds();
