@@ -130,7 +130,39 @@ Para uma reconfiguração Web completa, remova somente o conteúdo gerado de `bu
 - Se o navegador mantiver uma versão anterior, faça recarregamento forçado (`Ctrl+F5`) e confirme a data dos arquivos em `build-web/`.
 
 
-- Desenvolvimento: -gpuskinning=dev ou compare alterna CPU/GPU por frame.
-  - QA: sem flag, GPU ativa para modelos elegíveis com fallback CPU.
-  - Produção gradual: -gpuskinning=production -gpuskinning-models=ID1,ID2.
-  - Produção padrão: -gpuskinning=on.
+## Flags de renderização
+
+### GPU skinning
+
+- Desenvolvimento: `-gpuskinning=dev` ou `compare` alterna CPU/GPU por frame.
+- QA: sem flag, GPU ativa para modelos elegíveis com fallback CPU.
+- Produção gradual: `-gpuskinning=production -gpuskinning-models=ID1,ID2`.
+- Produção padrão: `-gpuskinning=on`.
+
+### Otimizações por fase
+
+Cada uma aceita `off|on|compare` e **vem desligada por padrão**. `compare` alterna
+por frame contra o caminho antigo, então qualquer divergência aparece como
+cintilação — é o jeito mais rápido de achar uma regressão visual.
+
+| Flag | O que liga |
+| --- | --- |
+| `-statictransformcache=on` | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. |
+| `-batching=on` | Cache espelhado de uniformes, submissão de vértices em bloco, fusão de comandos adjacentes na fila de opacos e redução dos pontos de flush. |
+| `-instancing=on` | Agrupa instâncias consecutivas da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. |
+
+Escada de rollout sugerida, a mesma já validada pelo GPU skinning: `off` →
+`compare` nas cenas de referência → `on` em QA → `on` em produção.
+
+### Medição
+
+`-renderstatscsv` grava `RenderPerformance_v9.csv` a cada 120 frames, após 180 de
+aquecimento. Além dos contadores de draw/vértice/upload, o arquivo traz a
+repartição do frame em microssegundos: `us_terrain`, `us_objects`,
+`us_characters`, `us_effects`, `us_sprites`, `us_simulation`, `us_select`,
+`us_setup`, `us_misc` e `us_unmeasured`.
+
+Comece por essas colunas antes de otimizar qualquer coisa. Ver
+`RENDER_INSTANCING_CACHE_BATCHING_PLAN.md` para o histórico de medições —
+inclusive as otimizações que os contadores confirmaram e que **não** moveram o
+tempo de frame.

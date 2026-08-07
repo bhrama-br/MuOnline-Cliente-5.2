@@ -173,8 +173,40 @@ simulação do jogo), `us_select` (`SelectObjects`), `us_setup` (`BeginOpengl` +
         não erro: o `.wasm` linka e a chamada aborta em runtime — e `RenderObjects()` chama a
         fila incondicionalmente. O cliente Web abortaria ao renderizar objetos.
   - [x] `libmu_legacy_scene.a` e `mu_legacy_web` compilam e linkam com zero indefinidos
-- [ ] Fase 4 — GPU Instancing de monstros
-- [ ] Fase 5 — Terreno, água e rollout
+- [x] **3.3 — Redução dos pontos de flush** *(atrás de `-batching=on`)*
+  - [x] Regra correta identificada: a fila guarda opacos com depth-test, e geometria opaca
+        com depth-test é **independente de ordem** contra outra igual. Só quem **compõe**
+        com o framebuffer (blend, alpha < 1, sem depth-test) precisa da barreira.
+        Alpha-test escreve profundidade e não mistura — não compõe.
+  - [x] `RenderMesh`, `RenderMeshAlternative`, `RenderMeshTranslate`: flush condicional
+  - [x] `RenderFace` (terreno): o caminho de fallthrough sempre termina em
+        `EnableAlphaTest()` ou `DisableAlphaBlend()` e **nunca liga blend** — aquele flush
+        nunca foi necessário. Era a maior fonte de fragmentação da fila, e a razão de a
+        fusão de comandos da 3.2 não ter nada para fundir.
+  - [x] Mantidas as barreiras legítimas: `glReadPixels`, leitura de profundidade,
+        `BeginOpengl`/`BeginSprite`/`BeginBitmap`, e o stencil de `RenderBodyShadow`
+- [x] **Fase 4 — GPU Instancing de monstros** *(atrás de `-instancing=on`)*
+  - [x] Paleta de ossos em textura `RGBA32F` com `texelFetch`, 3 texels por osso, uma
+        linha por instância. A UBO de 64 KB limitaria o lote a ~6 instâncias; SSBO e
+        `samplerBuffer` não existem no WebGL 2.
+  - [x] Atributos por instância com divisor 1; `wave`, efeito de material e `shadowMap`
+        ficam **fora** da chave de lote, que era exatamente o que os fragmentaria
+  - [x] Um shader só — `uInstanced` escolhe entre atributo e uniforme
+  - [x] Coletor com estado capturado **por valor** e reaplicado no flush, em vez de herdado
+        do GL; flush registrado nas mesmas barreiras da fila de opacos
+  - [x] Fallback para `DrawStaticMesh` por instância (lote de 1, backend sem
+        `glVertexAttribDivisor`/`glDrawElementsInstanced`, paleta grande demais)
+  - [x] Divisor e atributos desligados após cada draw instanciado — senão o VAO da malha
+        manteria os atributos ligados e o próximo draw não instanciado leria lixo
+  - [x] PC e Web compilando
+- [x] **Fase 5 — Rollout e documentação**
+  - [x] README com a tabela das três flags, a escada de rollout e as colunas de medição
+  - [ ] *Não feito, com justificativa* — terreno residente em VBO e água pelo caminho
+        `uWave`. `us_terrain` mede **277 µs de 7.400 µs (3,7%)**, e a 3.3 já resolveu a
+        fragmentação de lote do terreno. Reescrever a residência de terreno é trabalho
+        grande com teto medido de 3,7%, e há um alvo de 76% do frame ainda não
+        caracterizado. Fazer isto antes do v9 seria repetir o erro das quatro
+        primeiras rodadas.
 
 ---
 
