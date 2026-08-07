@@ -210,6 +210,42 @@ simulação do jogo), `us_select` (`SelectObjects`), `us_setup` (`BeginOpengl` +
 
 ---
 
+## 0.2 A medição final — o frame explicado
+
+Lorencia, 5 amostras com `gpu_timer_state = 2` (GL timer query funcionando).
+
+| | µs/frame |
+| --- | --- |
+| CPU (região medida) | 9.253 |
+| — destes, esperando em `glGetFloatv` | 4.017 |
+| **CPU, trabalho real** | **5.236** |
+| **GPU (timer query)** | **6.597** |
+
+O frame é **limitado pela GPU**, e a CPU passa 4 ms bloqueada em seis pontos de
+sincronização descobrindo isso.
+
+Com CPU e GPU sobrepostas, o frame tenderia a `max(5.236, 6.597) = 6.597 µs`.
+Ele custa 9.253 porque os seis `glGetFloatv` serializam os dois lados. **A perda
+por serialização é de ~2.650 µs, ou 29%.**
+
+Isso explica as sete rodadas anteriores de uma vez: cortar trabalho de CPU não
+podia ajudar, porque a CPU não era o polo mais longo. E remover **um** ponto de
+sincronização piorou o frame porque os outros cinco continuaram serializando —
+só se ganha removendo **todos**.
+
+### O que isso implica
+
+1. **Piso de 6.597 µs** enquanto a carga de GPU não mudar. Nada de CPU passa disso.
+2. **~2.650 µs recuperáveis** eliminando os seis readbacks. Exige espelhar a pilha
+   de matrizes na CPU em todos os sítios, não só em `BeginOpengl` — os demais
+   `SyncLegacyRenderMatrices` vêm depois de manipulações arbitrárias em código de
+   efeito e objeto.
+3. **Abaixo de 6.597 µs** só reduzindo trabalho de GPU: overdraw, fill rate,
+   quantidade e tamanho de textura. **Nenhuma das cinco fases deste plano toca
+   nisso.**
+
+---
+
 ## 1. Diagnóstico — onde o tempo está indo hoje
 
 ### 1.1 CPU: o skinning nunca foi removido
