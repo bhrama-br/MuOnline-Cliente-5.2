@@ -346,13 +346,21 @@ void FlushInstanceBatch()
         return;
     }
 
+    // ApplyInstanceBatchState chama helpers de estado legado. Hoje nenhum deles
+    // descarrega a fila de opacos, mas se algum passar a descarregar, ele
+    // reentraria aqui com o lote ainda aberto e recursaria ate estourar a pilha.
+    static bool flushing = false;
+    if (flushing) return;
+    flushing = true;
+
     Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
     const size_t paletteFloats = static_cast<size_t>(g_instanceKey.boneCount) * 12;
     for (size_t i = 0; i < g_instances.size(); ++i)
         g_instances[i].boneMatrices = &g_instancePalettes[i * paletteFloats];
 
     ApplyInstanceBatchState(g_instanceKey);
-    if (!renderer.DrawStaticMeshInstanced(g_instanceKey.meshHandle, &g_instances[0], g_instances.size()))
+    if (!renderer.DrawStaticMeshInstanced(g_instanceKey.meshHandle, &g_instances[0], g_instances.size(),
+            static_cast<float>(WorldTime)))
     {
         // Sem caminho instanciado (lote de um, backend sem suporte, paleta grande
         // demais): desenha uma a uma, com o mesmo resultado visual.
@@ -370,6 +378,7 @@ void FlushInstanceBatch()
     g_instances.clear();
     g_instancePalettes.clear();
     g_instanceBatchOpen = false;
+    flushing = false;
 }
 
 namespace

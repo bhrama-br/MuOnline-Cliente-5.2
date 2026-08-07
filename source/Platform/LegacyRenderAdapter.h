@@ -256,8 +256,9 @@ namespace Platform
         // Desenha N instancias da mesma malha residente numa chamada. Devolve
         // false quando o backend nao suporta instancing ou a paleta nao cabe; o
         // chamador entao emite instancia por instancia por DrawStaticMesh.
-        virtual bool DrawStaticMeshInstanced(unsigned int handle, const StaticMeshInstance* instances, size_t count)
-        { (void)handle; (void)instances; (void)count; return false; }
+        virtual bool DrawStaticMeshInstanced(unsigned int handle, const StaticMeshInstance* instances, size_t count,
+            float worldTime = 0.f)
+        { (void)handle; (void)instances; (void)count; (void)worldTime; return false; }
         // 0 quando nao ha caminho instanciado disponivel.
         virtual size_t GetMaxInstanceBoneCount() const { return 0; }
         virtual void ReleaseStaticMesh(unsigned int handle) { (void)handle; }

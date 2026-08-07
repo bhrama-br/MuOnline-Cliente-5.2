@@ -621,6 +621,11 @@ namespace
             // skinning: deixa-lo ligado de um DrawStaticMesh anterior achataria a
             // geometria imediata seguinte.
             EnviarUniform1i(m_shadowMapLocation, 0, m_shadowMapEnviado);
+            // OBRIGATORIO. Um atributo de vertice DESABILITADO le (0,0,0,1), nao
+            // lixo: com uInstanced preso em 1 apos um draw instanciado, o caminho
+            // imediato passaria a tirar a cor de iColor.rgb, que vale (0,0,0), e
+            // desenharia UI, sprites e terreno pretos.
+            EnviarUniform1i(m_instancedLocation, 0, m_instancedEnviado);
 
             if (!m_vaoAtivo)
             {
@@ -1109,7 +1114,8 @@ namespace
             return (g_ModernGl.HasInstancing() && !m_instancingUnavailable) ? kMaxInstanceBones : 0;
         }
 
-        virtual bool DrawStaticMeshInstanced(unsigned int handle, const Platform::StaticMeshInstance* instances, size_t count)
+        virtual bool DrawStaticMeshInstanced(unsigned int handle, const Platform::StaticMeshInstance* instances, size_t count,
+            float worldTime = 0.f)
         {
             if (instances == NULL || count == 0) return false;
             if (!g_ModernGl.HasInstancing() || m_instancingUnavailable) return false;
@@ -1182,6 +1188,10 @@ namespace
 
             SetupSharedStaticMeshUniforms();
             EnviarUniform1i(m_instancedLocation, 1, m_instancedEnviado);
+            // Incondicional aqui: o lote pode misturar instancias com e sem wave
+            // ou efeito de material, e nao ha como saber pela chave — justamente
+            // porque esses flags foram tirados dela de proposito.
+            EnviarUniform1f(m_worldTimeLocation, worldTime, m_worldTimeEnviado);
             if (m_bonePaletteLocation >= 0)
                 glUniform1i(m_bonePaletteLocation, 1);
 
