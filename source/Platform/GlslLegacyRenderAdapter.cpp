@@ -1741,6 +1741,11 @@ namespace Platform
     }
 
     unsigned long long GlslGetLastGpuFrameTimeUs() { return g_gpuLastFrameTimeUs; }
+    int GlslGetGpuFrameTimerState()
+    {
+        if (g_gpuTimerUnavailable || !g_ModernGl.HasTimerQuery()) return 0;
+        return g_gpuLastFrameTimeUs > 0 ? 2 : 1;
+    }
 }
 #else
 namespace Platform
@@ -1748,6 +1753,7 @@ namespace Platform
     void GlslBeginGpuFrameTimer() {}
     void GlslEndGpuFrameTimer() {}
     unsigned long long GlslGetLastGpuFrameTimeUs() { return 0; }
+    int GlslGetGpuFrameTimerState() { return 0; }
 }
 #endif
 

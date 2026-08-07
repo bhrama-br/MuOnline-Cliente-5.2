@@ -341,6 +341,10 @@ namespace Platform
     void BeginGpuFrameTimer();
     void EndGpuFrameTimer();
     unsigned long long GetLastGpuFrameTimeUs();
+    // 0 = sem suporte no backend, 1 = ativo mas ainda sem amostra pronta,
+    // 2 = medindo. Existe para que uma leitura de zero se explique sozinha,
+    // em vez de exigir uma rodada de depuracao para distinguir os casos.
+    int GetGpuFrameTimerState();
 
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();

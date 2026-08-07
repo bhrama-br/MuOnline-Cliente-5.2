@@ -246,6 +246,7 @@ namespace Platform
     void GlslBeginGpuFrameTimer();
     void GlslEndGpuFrameTimer();
     unsigned long long GlslGetLastGpuFrameTimeUs();
+    int GlslGetGpuFrameTimerState();
 }
 
 void Platform::BeginGpuFrameTimer()
@@ -261,6 +262,11 @@ void Platform::EndGpuFrameTimer()
 unsigned long long Platform::GetLastGpuFrameTimeUs()
 {
     return IsGlslLegacyBackendEnabled() ? GlslGetLastGpuFrameTimeUs() : 0;
+}
+
+int Platform::GetGpuFrameTimerState()
+{
+    return IsGlslLegacyBackendEnabled() ? GlslGetGpuFrameTimerState() : 0;
 }
 
 void Platform::SetInstancingModelWhitelist(const char* modelIds)
