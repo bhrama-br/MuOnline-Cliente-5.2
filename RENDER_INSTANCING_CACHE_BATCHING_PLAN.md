@@ -244,6 +244,34 @@ só se ganha removendo **todos**.
    quantidade e tamanho de textura. **Nenhuma das cinco fases deste plano toca
    nisso.**
 
+## 0.3 O resultado — espelho de matrizes em CPU
+
+Lorencia, mesmas cenas.
+
+| `-cpumatrices` | n | cpu_us | gpu_us | us_readback | chamadas | divergência rel. |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | 18 | 7.596 | 3.521 | 3.183 | 6,0 | — |
+| compare | 7 | 7.519 | 5.581 | 3.731 | 6,0 | **1,0e-6** |
+| **on** | 3 | **4.450** | 5.651 | **0** | **0,0** | — |
+
+**Os seis `glGetFloatv` foram a zero. `cpu_us` caiu 41%: 7.596 → 4.450 µs.**
+
+A divergência de 1,0e-6 é epsilon de float, medida agora sobre *todas* as
+manipulações de matriz do jogo — efeitos e objetos inclusos —, não só sobre
+`BeginOpengl`.
+
+O sinal de que o mecanismo é o previsto: com `on`, `cpu_us` (4.450) ficou
+**abaixo** de `gpu_us` (5.651). A CPU passou a terminar antes da GPU e a correr à
+frente, em vez de bloquear seis vezes por frame esperando por ela. O frame agora
+tende ao maior dos dois, como projetado na seção 0.2.
+
+Ressalva honesta: são 3 amostras no modo `on`. A magnitude precisa de mais
+capturas; o mecanismo não, porque `matrix_readback_calls = 0` é binário.
+
+**Esta foi a única mudança da sessão com ganho de tempo reproduzível** — e ela
+não estava no plano original. Veio da medição por fase, depois que sete rodadas
+de otimização de CPU renderam zero.
+
 ---
 
 ## 1. Diagnóstico — onde o tempo está indo hoje

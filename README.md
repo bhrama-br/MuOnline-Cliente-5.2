@@ -149,7 +149,9 @@ cintilação — é o jeito mais rápido de achar uma regressão visual.
 | --- | --- |
 | `-statictransformcache=on` | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. |
 | `-batching=on` | Cache espelhado de uniformes, submissão de vértices em bloco, fusão de comandos adjacentes na fila de opacos e redução dos pontos de flush. |
-| `-instancing=on` | Agrupa instâncias consecutivas da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. |
+| `-instancing=on` | Agrupa instâncias da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. |
+| `-cpumatrices=on` | **A única com ganho medido.** Lê projeção e modelview do espelho em CPU em vez de `glGetFloatv`. Elimina os 6 pontos de sincronização por frame: `cpu_us` de 7.596 para 4.450 µs em Lorencia, −41%. Divergência contra o driver medida em 1,0e-6. |
+| `-meshcache=on` | Deduplicação de cantos e índices de 16 bits na malha residente. **Nasce ligada** — já estava em produção sem chave; o interruptor serve para desligar. |
 
 Escada de rollout sugerida, a mesma já validada pelo GPU skinning: `off` →
 `compare` nas cenas de referência → `on` em QA → `on` em produção.
