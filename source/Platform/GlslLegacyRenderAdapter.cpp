@@ -272,7 +272,8 @@ namespace
               m_alphaTestLocation(-1), m_alphaRefLocation(-1), m_alphaTestReference(0.25f),
               m_fogLocation(-1), m_fogColorLocation(-1), m_fogStartLocation(-1), m_fogEndLocation(-1),
               m_fogEnabled(false), m_fogStart(0.f), m_fogEnd(1.f),
-              m_alphaTestEnabled(false), m_texture2DEnabled(false), m_depthTestEnabled(false), m_texture(0), m_batching(false), m_failed(false), m_logged(false)
+              m_alphaTestEnabled(false), m_texture2DEnabled(false), m_depthTestEnabled(false), m_texture(0), m_batching(false), m_failed(false), m_logged(false),
+              m_resourceGeneration(1)
         {
 			// Capacidade inicial para os lotes comuns de UI/mundo. clear() preserva
 			// essa memoria entre frames, evitando realocacoes no aquecimento.
@@ -314,15 +315,70 @@ namespace
             m_texturaEnviadaConhecida = false;
             m_depthTestConhecido = false;
             m_blendModeEnviado = -1;
+            m_modeloEnviadoConhecido = false;
+            m_drawColorEnviada[0] = m_drawColorEnviada[1] = m_drawColorEnviada[2] = -1e30f;
+            m_skinningEnviado = -1;
+            m_lightingEnviado = -1;
+            m_lightPositionEnviada[0] = m_lightPositionEnviada[1] = m_lightPositionEnviada[2] = -1e30f;
+            m_bodyScaleEnviado = -1e30f;
+            m_postTranslationEnviada[0] = m_postTranslationEnviada[1] = m_postTranslationEnviada[2] = -1e30f;
+            m_waveEnviado = -1;
+            m_worldTimeEnviado = -1e30f;
+            m_materialEffectEnviado = -1;
+            m_shadowMapEnviado = -1;
+            m_bodyOriginEnviada[0] = m_bodyOriginEnviada[1] = m_bodyOriginEnviada[2] = -1e30f;
+            m_boneScaleEnviado = -1e30f;
+            m_texturaUnidadeEnviada = false;
+        }
+
+        // Setters com espelho. Devolvem sem tocar no GL quando o valor ja esta la;
+        // com o batching desligado, sempre enviam, para reproduzir exatamente o
+        // trafego do caminho anterior.
+        bool CacheDeUniformesAtivo() const
+        {
+            return Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching);
+        }
+        void EnviarUniform1i(GLint location, int value, int& espelho)
+        {
+            if (location < 0) return;
+            if (CacheDeUniformesAtivo() && espelho == value) { ++m_frameStats.uniformCallsSaved; return; }
+            glUniform1i(location, value);
+            espelho = value;
+        }
+        void EnviarUniform1f(GLint location, float value, float& espelho)
+        {
+            if (location < 0) return;
+            if (CacheDeUniformesAtivo() && espelho == value) { ++m_frameStats.uniformCallsSaved; return; }
+            glUniform1f(location, value);
+            espelho = value;
+        }
+        void EnviarUniform3f(GLint location, float x, float y, float z, float* espelho)
+        {
+            if (location < 0) return;
+            if (CacheDeUniformesAtivo() && espelho[0] == x && espelho[1] == y && espelho[2] == z)
+            { ++m_frameStats.uniformCallsSaved; return; }
+            glUniform3f(location, x, y, z);
+            espelho[0] = x; espelho[1] = y; espelho[2] = z;
+        }
+        void EnviarUniformMatriz4(GLint location, const float* value, float* espelho, bool& conhecido)
+        {
+            if (location < 0) return;
+            if (CacheDeUniformesAtivo() && conhecido && memcmp(espelho, value, sizeof(float) * 16) == 0)
+            { ++m_frameStats.uniformCallsSaved; return; }
+            glUniformMatrix4fv(location, 1, GL_FALSE, value);
+            memcpy(espelho, value, sizeof(float) * 16);
+            conhecido = true;
         }
 
         virtual ~GlslLegacyRenderAdapter()
         {
-            for (std::map<const void*, StaticMesh>::iterator it = m_staticMeshes.begin(); it != m_staticMeshes.end(); ++it)
+            for (size_t i = 0; i < m_staticMeshes.size(); ++i)
             {
-                if (it->second.vertexArray != 0) glDeleteVertexArrays(1, &it->second.vertexArray);
-                if (it->second.vertexBuffer != 0) glDeleteBuffers(1, &it->second.vertexBuffer);
-                if (it->second.indexBuffer != 0) glDeleteBuffers(1, &it->second.indexBuffer);
+                StaticMesh& mesh = m_staticMeshes[i];
+                if (!mesh.alive) continue;
+                if (mesh.vertexArray != 0) glDeleteVertexArrays(1, &mesh.vertexArray);
+                if (mesh.vertexBuffer != 0) glDeleteBuffers(1, &mesh.vertexBuffer);
+                if (mesh.indexBuffer != 0) glDeleteBuffers(1, &mesh.indexBuffer);
             }
             if (m_vertexArray != 0) glDeleteVertexArrays(1, &m_vertexArray);
             if (m_vertexBuffer != 0) glDeleteBuffers(1, &m_vertexBuffer);
@@ -490,15 +546,23 @@ namespace
                 m_texturaEnviada = m_texture;
                 m_texturaEnviadaConhecida = true;
             }
-            const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
-            glUniformMatrix4fv(m_modelLocation, 1, GL_FALSE, identity);
-            glUniform3f(m_drawColorLocation, 1.f, 1.f, 1.f);
-            glUniform1i(m_skinningLocation, 0);
-            glUniform1i(m_lightingLocation, 0);
-            glUniform1f(m_bodyScaleLocation, 1.f);
-            glUniform3f(m_postTranslationLocation, 0.f, 0.f, 0.f);
-            glUniform1i(m_waveLocation, 0);
-            glUniform1i(m_materialEffectLocation, 0);
+            // Volta ao neutro para o caminho imediato. Sem espelho isto custava 8
+            // chamadas por lote de UI, mesmo quando nenhum DrawStaticMesh havia
+            // mexido em nada desde o lote anterior.
+            static const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
+            EnviarUniformMatriz4(m_modelLocation, identity, m_modeloEnviado, m_modeloEnviadoConhecido);
+            EnviarUniform3f(m_drawColorLocation, 1.f, 1.f, 1.f, m_drawColorEnviada);
+            EnviarUniform1i(m_skinningLocation, 0, m_skinningEnviado);
+            EnviarUniform1i(m_lightingLocation, 0, m_lightingEnviado);
+            EnviarUniform1f(m_bodyScaleLocation, 1.f, m_bodyScaleEnviado);
+            EnviarUniform3f(m_postTranslationLocation, 0.f, 0.f, 0.f, m_postTranslationEnviada);
+            EnviarUniform1i(m_waveLocation, 0, m_waveEnviado);
+            EnviarUniform1i(m_materialEffectLocation, 0, m_materialEffectEnviado);
+            // uShadowMap e uBoneScale nao eram zerados aqui. Com skinning=0 o
+            // shader ignora boneScale, mas shadowMap deforma a posicao mesmo sem
+            // skinning: deixa-lo ligado de um DrawStaticMesh anterior achataria a
+            // geometria imediata seguinte.
+            EnviarUniform1i(m_shadowMapLocation, 0, m_shadowMapEnviado);
 
             if (!m_vaoAtivo)
             {
@@ -544,6 +608,64 @@ namespace
             m_vertices.push_back(m_current);
         }
         virtual void Vertex3fv(const float* vertex) { Vertex3f(vertex[0], vertex[1], vertex[2]); }
+
+        virtual void DrawVertices(Platform::LegacyPrimitive primitive, const Platform::LegacyBulkVertex* vertices, size_t count)
+        {
+            if (vertices == NULL || count == 0) return;
+            if (!Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching))
+            {
+                Platform::ILegacyRenderAdapter::DrawVertices(primitive, vertices, count);
+                return;
+            }
+            Begin(primitive);
+            const size_t base = m_vertices.size();
+            m_vertices.resize(base + count);
+            // LegacyBulkVertex e LegacyVertex tem o mesmo layout; a copia e uma
+            // so, em vez de 4 chamadas virtuais por vertice.
+            memcpy(&m_vertices[base], vertices, count * sizeof(LegacyVertex));
+            // Color4f/TexCoord2f/Normal3f deixavam o ultimo valor como corrente,
+            // e ha emissores que contam com essa heranca no draw seguinte.
+            HerdarUltimoVertice(m_vertices[m_vertices.size() - 1]);
+            End();
+        }
+
+        virtual void DrawVertexArrays(Platform::LegacyPrimitive primitive, const float (*positions)[3],
+            const float (*colors)[4], const float (*texCoords)[2], size_t count)
+        {
+            if (positions == NULL || count == 0) return;
+            if (!Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching))
+            {
+                Platform::ILegacyRenderAdapter::DrawVertexArrays(primitive, positions, colors, texCoords, count);
+                return;
+            }
+            Begin(primitive);
+            const size_t base = m_vertices.size();
+            m_vertices.resize(base + count);
+            LegacyVertex* out = &m_vertices[base];
+            for (size_t i = 0; i < count; ++i)
+            {
+                LegacyVertex& v = out[i];
+                v.position[0] = positions[i][0]; v.position[1] = positions[i][1]; v.position[2] = positions[i][2];
+                if (colors != NULL)
+                {
+                    // A saturacao e obrigatoria: glColor*f guardava a cor em ponto
+                    // fixo, e a iluminacao de modelo passa de 1.0 com frequencia.
+                    v.color[0] = Saturar(colors[i][0]); v.color[1] = Saturar(colors[i][1]);
+                    v.color[2] = Saturar(colors[i][2]); v.color[3] = Saturar(colors[i][3]);
+                }
+                else
+                    memcpy(v.color, m_current.color, sizeof(v.color));
+                if (texCoords != NULL)
+                { v.texCoord[0] = texCoords[i][0]; v.texCoord[1] = texCoords[i][1]; }
+                else
+                    memcpy(v.texCoord, m_current.texCoord, sizeof(v.texCoord));
+                // O caminho por vertice nunca chamava Normal3f aqui: herdava a
+                // normal corrente. Reproduzir isso mantem o resultado igual.
+                memcpy(v.normal, m_current.normal, sizeof(v.normal));
+            }
+            HerdarUltimoVertice(out[count - 1]);
+            End();
+        }
         virtual void SetMatrices(const float* projection, const float* modelView)
         {
             const bool projectionChanged = projection != NULL &&
@@ -636,6 +758,14 @@ namespace
             else if (reason == Platform::GpuSkinningFallbackGeometry) ++m_frameStats.gpuSkinningGeometryFallbacks;
             else ++m_frameStats.gpuSkinningResourceFallbacks;
         }
+        virtual void RecordCpuTransformWork(unsigned long long transformsExecuted, unsigned long long transformsSkipped,
+            unsigned long long animationsExecuted, unsigned long long animationsSkipped)
+        {
+            m_frameStats.transformsExecuted += transformsExecuted;
+            m_frameStats.transformsSkipped += transformsSkipped;
+            m_frameStats.animationsExecuted += animationsExecuted;
+            m_frameStats.animationsSkipped += animationsSkipped;
+        }
         virtual void InvalidateStateCache()
         {
             FlushPendingBatch();
@@ -647,7 +777,12 @@ namespace
         // EnsureResources reconstrua tudo no contexto novo.
         virtual void InvalidateGraphicsResources()
         {
+            // Avancar a geracao aposenta todos os handles ja distribuidos sem
+            // precisar avisar cada BMD: o proximo IsStaticMeshResident responde
+            // false e o cliente reconstroi a geometria sob demanda.
+            ++m_resourceGeneration;
             m_staticMeshes.clear();
+            m_staticMeshFreeList.clear();
             m_program = 0;
             m_vertexBuffer = 0;
             m_vertexBufferCapacity = 0;
@@ -688,17 +823,22 @@ namespace
             Platform::LegacyRenderLog("GlslLegacyRenderAdapter: recursos invalidados apos recriacao de contexto");
         }
 
-        virtual bool UploadStaticMesh(const void* key, const Platform::StaticMeshVertex* vertices, size_t vertexCount,
+        virtual bool IsStaticMeshResident(unsigned int handle) const
+        {
+            return ResolveStaticMesh(handle) != NULL;
+        }
+
+        virtual unsigned int UploadStaticMesh(const Platform::StaticMeshVertex* vertices, size_t vertexCount,
             const unsigned int* indices, size_t indexCount)
         {
-            if (key == NULL || vertices == NULL || indices == NULL || vertexCount == 0 || indexCount == 0 || !EnsureResources())
-                return false;
-            if (m_staticMeshes.find(key) != m_staticMeshes.end())
-                return true;
+            if (vertices == NULL || indices == NULL || vertexCount == 0 || indexCount == 0 || !EnsureResources())
+                return 0;
 
             StaticMesh mesh;
             mesh.vertexCount = vertexCount;
             mesh.indexCount = indexCount;
+            mesh.alive = true;
+            mesh.generation = m_resourceGeneration;
             glGenVertexArrays(1, &mesh.vertexArray);
             glGenBuffers(1, &mesh.vertexBuffer);
             glGenBuffers(1, &mesh.indexBuffer);
@@ -706,7 +846,25 @@ namespace
             glBindBuffer(GL_ARRAY_BUFFER, mesh.vertexBuffer);
             glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertexCount * sizeof(Platform::StaticMeshVertex)), vertices, GL_STATIC_DRAW);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indexCount * sizeof(unsigned int)), indices, GL_STATIC_DRAW);
+            // A conversao para 16 bits acontece aqui, e nao no cliente: o formato
+            // do IBO e uma decisao do backend, e o buffer temporario morre nesta
+            // funcao em vez de virar mais um array vivo no Mesh_t.
+            GLsizeiptr indexBytes;
+            if (vertexCount <= 65536)
+            {
+                mesh.indexType = GL_UNSIGNED_SHORT;
+                indexBytes = static_cast<GLsizeiptr>(indexCount * sizeof(unsigned short));
+                std::vector<unsigned short> narrow(indexCount);
+                for (size_t i = 0; i < indexCount; ++i)
+                    narrow[i] = static_cast<unsigned short>(indices[i]);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexBytes, &narrow[0], GL_STATIC_DRAW);
+            }
+            else
+            {
+                mesh.indexType = GL_UNSIGNED_INT;
+                indexBytes = static_cast<GLsizeiptr>(indexCount * sizeof(unsigned int));
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexBytes, indices, GL_STATIC_DRAW);
+            }
             glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, position));
             glEnableVertexAttribArray(1); glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, color));
             glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, texCoord));
@@ -716,59 +874,80 @@ namespace
             glEnableVertexAttribArray(6); glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, waveSeed));
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
-            m_staticMeshes[key] = mesh;
-            ++m_frameStats.bufferDataCalls;
-            ++m_frameStats.bufferDataCalls;
+
+            size_t slot = m_staticMeshFreeList.empty() ? m_staticMeshes.size() : m_staticMeshFreeList.back();
+            if (m_staticMeshFreeList.empty())
+                m_staticMeshes.push_back(mesh);
+            else { m_staticMeshFreeList.pop_back(); m_staticMeshes[slot] = mesh; }
+
+            m_frameStats.bufferDataCalls += 2;
+            ++m_frameStats.staticMeshCacheMisses;
+            m_frameStats.staticMeshVerticesResident += static_cast<unsigned long long>(vertexCount);
+            m_frameStats.staticMeshIndicesResident += static_cast<unsigned long long>(indexCount);
             m_frameStats.staticMeshUploadBytes += static_cast<unsigned long long>(vertexCount * sizeof(Platform::StaticMeshVertex)) +
-                static_cast<unsigned long long>(indexCount * sizeof(unsigned int));
-            return true;
+                static_cast<unsigned long long>(indexBytes);
+            return MakeStaticMeshHandle(slot);
         }
 
-        virtual bool DrawStaticMesh(const void* key, const float* color, const float* modelMatrix,
+        virtual bool DrawStaticMesh(unsigned int handle, const float* color, const float* modelMatrix,
             const float* boneMatrices = NULL, size_t boneCount = 0, float bodyScale = 1.f,
             bool lighting = false, const float* lightPosition = NULL, const float* postTranslation = NULL,
             bool wave = false, float worldTime = 0.f, int materialEffect = 0, bool shadowMap = false, const float* bodyOrigin = NULL, float boneScale = 1.f)
         {
-            std::map<const void*, StaticMesh>::const_iterator found = m_staticMeshes.find(key);
-            if (found == m_staticMeshes.end() || color == NULL || modelMatrix == NULL || !EnsureResources())
+            const StaticMesh* resolved = ResolveStaticMesh(handle);
+            if (resolved == NULL || color == NULL || modelMatrix == NULL || !EnsureResources())
                 return false;
             FlushPendingBatch();
-            const StaticMesh& mesh = found->second;
-            glUseProgram(m_program);
-            glUniform1i(m_textureLocation, 0);
-            glUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0);
-            glUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0);
-            glUniform1f(m_alphaRefLocation, m_alphaTestReference);
-            glUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0);
-            glUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2]);
-            glUniform1f(m_fogStartLocation, m_fogStart);
-            glUniform1f(m_fogEndLocation, m_fogEnd);
-            glUniformMatrix4fv(m_projectionLocation, 1, GL_FALSE, m_projection);
-            glUniformMatrix4fv(m_modelViewLocation, 1, GL_FALSE, m_modelView);
+            ++m_frameStats.staticMeshCacheHits;
+            const StaticMesh& mesh = *resolved;
+            if (!m_programaAtivo)
+            {
+                glUseProgram(m_program);
+                m_programaAtivo = true;
+                ++m_frameStats.programChanges;
+            }
+            // A unidade de textura e constante durante toda a vida do programa.
+            if (!m_texturaUnidadeEnviada || !CacheDeUniformesAtivo())
+            {
+                glUniform1i(m_textureLocation, 0);
+                m_texturaUnidadeEnviada = true;
+            }
+            EnviarUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0, m_usarTexturaEnviado);
+            EnviarUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0, m_alphaTestEnviado);
+            EnviarUniform1f(m_alphaRefLocation, m_alphaTestReference, m_alphaRefEnviado);
+            EnviarUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0, m_fogEnviado);
+            EnviarUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2], m_fogColorEnviada);
+            EnviarUniform1f(m_fogStartLocation, m_fogStart, m_fogStartEnviado);
+            EnviarUniform1f(m_fogEndLocation, m_fogEnd, m_fogEndEnviado);
+            EnviarUniformMatriz4(m_projectionLocation, m_projection, m_projEnviada, m_matrizProjEnviada);
+            EnviarUniformMatriz4(m_modelViewLocation, m_modelView, m_mvEnviada, m_matrizMvEnviada);
             const float model[16] = {
                 modelMatrix[0], modelMatrix[4], modelMatrix[8], 0.f,
                 modelMatrix[1], modelMatrix[5], modelMatrix[9], 0.f,
                 modelMatrix[2], modelMatrix[6], modelMatrix[10], 0.f,
                 modelMatrix[3], modelMatrix[7], modelMatrix[11], 1.f };
-            glUniformMatrix4fv(m_modelLocation, 1, GL_FALSE, model);
+            EnviarUniformMatriz4(m_modelLocation, model, m_modeloEnviado, m_modeloEnviadoConhecido);
             // Nao limite a cor antes da iluminacao no vertex shader. No caminho
             // legado, a saturacao acontece apos BodyLight * IntensityTransform.
-            glUniform3f(m_drawColorLocation, color[0], color[1], color[2]);
+            EnviarUniform3f(m_drawColorLocation, color[0], color[1], color[2], m_drawColorEnviada);
             const bool skinning = boneMatrices != NULL && boneCount > 0 && boneCount <= 200 && m_boneBlockIndex != GL_INVALID_INDEX;
-            glUniform1i(m_skinningLocation, skinning ? 1 : 0);
-            glUniform1i(m_lightingLocation, lighting ? 1 : 0);
-            glUniform1f(m_bodyScaleLocation, bodyScale);
+            EnviarUniform1i(m_skinningLocation, skinning ? 1 : 0, m_skinningEnviado);
+            EnviarUniform1i(m_lightingLocation, lighting ? 1 : 0, m_lightingEnviado);
+            EnviarUniform1f(m_bodyScaleLocation, bodyScale, m_bodyScaleEnviado);
             if (postTranslation != NULL)
-                glUniform3f(m_postTranslationLocation, postTranslation[0], postTranslation[1], postTranslation[2]);
-            glUniform1i(m_waveLocation, wave ? 1 : 0);
-            glUniform1f(m_worldTimeLocation, worldTime);
-            glUniform1i(m_materialEffectLocation, materialEffect);
-            glUniform1i(m_shadowMapLocation, shadowMap ? 1 : 0);
+                EnviarUniform3f(m_postTranslationLocation, postTranslation[0], postTranslation[1], postTranslation[2], m_postTranslationEnviada);
+            EnviarUniform1i(m_waveLocation, wave ? 1 : 0, m_waveEnviado);
+            // uWorldTime so entra na conta quando wave ou um efeito de material o
+            // usa; enviar por malha em cena parada era puro trafego.
+            if (wave || materialEffect != 0)
+                EnviarUniform1f(m_worldTimeLocation, worldTime, m_worldTimeEnviado);
+            EnviarUniform1i(m_materialEffectLocation, materialEffect, m_materialEffectEnviado);
+            EnviarUniform1i(m_shadowMapLocation, shadowMap ? 1 : 0, m_shadowMapEnviado);
             if (shadowMap && bodyOrigin != NULL)
-                glUniform3f(m_bodyOriginLocation, bodyOrigin[0], bodyOrigin[1], bodyOrigin[2]);
-            glUniform1f(m_boneScaleLocation, boneScale);
+                EnviarUniform3f(m_bodyOriginLocation, bodyOrigin[0], bodyOrigin[1], bodyOrigin[2], m_bodyOriginEnviada);
+            EnviarUniform1f(m_boneScaleLocation, boneScale, m_boneScaleEnviado);
             if (lighting && lightPosition != NULL)
-                glUniform3f(m_lightPositionLocation, lightPosition[0], lightPosition[1], lightPosition[2]);
+                EnviarUniform3f(m_lightPositionLocation, lightPosition[0], lightPosition[1], lightPosition[2], m_lightPositionEnviada);
             if (skinning)
             {
                 std::vector<float>& rows = m_boneRows;
@@ -798,26 +977,43 @@ namespace
                 glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
                 glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_boneBuffer);
             }
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, m_texture);
+            if (!CacheDeUniformesAtivo() || !m_texturaEnviadaConhecida || m_texturaEnviada != m_texture)
+            {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, m_texture);
+                m_texturaEnviada = m_texture;
+                m_texturaEnviadaConhecida = true;
+                ++m_frameStats.textureChanges;
+            }
             glBindVertexArray(mesh.vertexArray);
-            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.indexCount), GL_UNSIGNED_INT, NULL);
+            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.indexCount), mesh.indexType, NULL);
             ++m_frameStats.drawCalls;
             ++m_frameStats.staticMeshDrawCalls;
             m_frameStats.vertices += mesh.indexCount;
             m_frameStats.staticMeshIndices += mesh.indexCount;
-            InvalidarCacheDeEstado();
+            if (CacheDeUniformesAtivo())
+            {
+                // O unico estado que esta funcao realmente estraga para o caminho
+                // imediato e o VAO: o programa, os uniformes e a textura ficam
+                // espelhados corretamente. Invalidar tudo, como antes, obrigava a
+                // proxima malha do MESMO modelo a reenviar as ~20 chamadas.
+                m_vaoAtivo = false;
+            }
+            else
+                InvalidarCacheDeEstado();
             return true;
         }
 
-        virtual void ReleaseStaticMesh(const void* key)
+        virtual void ReleaseStaticMesh(unsigned int handle)
         {
-            std::map<const void*, StaticMesh>::iterator found = m_staticMeshes.find(key);
-            if (found == m_staticMeshes.end()) return;
-            if (found->second.vertexArray != 0) glDeleteVertexArrays(1, &found->second.vertexArray);
-            if (found->second.vertexBuffer != 0) glDeleteBuffers(1, &found->second.vertexBuffer);
-            if (found->second.indexBuffer != 0) glDeleteBuffers(1, &found->second.indexBuffer);
-            m_staticMeshes.erase(found);
+            if (ResolveStaticMesh(handle) == NULL) return;
+            const size_t slot = static_cast<size_t>(handle & StaticMeshSlotMask) - 1;
+            StaticMesh& mesh = m_staticMeshes[slot];
+            if (mesh.vertexArray != 0) glDeleteVertexArrays(1, &mesh.vertexArray);
+            if (mesh.vertexBuffer != 0) glDeleteBuffers(1, &mesh.vertexBuffer);
+            if (mesh.indexBuffer != 0) glDeleteBuffers(1, &mesh.indexBuffer);
+            mesh = StaticMesh();
+            m_staticMeshFreeList.push_back(slot);
         }
 
     private:
@@ -873,6 +1069,15 @@ namespace
         // 21,16,13) saturava para BRANCO no framebuffer, e a cena inteira ficava lavada.
         // Era um caso em que nada acusava erro -- decodificacao, upload, nome de textura
         // e uniformes todos corretos, e a conta do fragmento e que estava fora de faixa.
+        // O caminho por vertice deixava cor/UV/normal do ultimo vertice como
+        // estado corrente. A submissao em bloco tem que deixar o mesmo.
+        void HerdarUltimoVertice(const LegacyVertex& ultimo)
+        {
+            memcpy(m_current.color, ultimo.color, sizeof(m_current.color));
+            memcpy(m_current.texCoord, ultimo.texCoord, sizeof(m_current.texCoord));
+            memcpy(m_current.normal, ultimo.normal, sizeof(m_current.normal));
+        }
+
         static float Saturar(float valor)
         {
             if (valor < 0.f) return 0.f;
@@ -886,13 +1091,40 @@ namespace
         }
         struct StaticMesh
         {
-            StaticMesh() : vertexArray(0), vertexBuffer(0), indexBuffer(0), vertexCount(0), indexCount(0) {}
+            StaticMesh() : vertexArray(0), vertexBuffer(0), indexBuffer(0), vertexCount(0), indexCount(0),
+                indexType(GL_UNSIGNED_INT), generation(0), alive(false) {}
             GLuint vertexArray;
             GLuint vertexBuffer;
             GLuint indexBuffer;
             size_t vertexCount;
             size_t indexCount;
+            // 16 bits sempre que os vertices unicos couberem: metade da banda de
+            // indice e do espaco em VRAM, sem custo nenhum do lado do desenho.
+            GLenum indexType;
+            unsigned int generation;
+            bool alive;
         };
+
+        // Handle = geracao (12 bits altos) + slot + 1 (20 bits baixos). O "+1"
+        // reserva o zero para "nao residente", e a geracao faz um handle sobreviver
+        // como valor mas se identificar como morto apos a recriacao do contexto.
+        enum { StaticMeshSlotBits = 20, StaticMeshSlotMask = (1 << StaticMeshSlotBits) - 1 };
+
+        unsigned int MakeStaticMeshHandle(size_t slot) const
+        {
+            return ((m_resourceGeneration & 0xFFFu) << StaticMeshSlotBits) |
+                (static_cast<unsigned int>(slot + 1) & StaticMeshSlotMask);
+        }
+
+        const StaticMesh* ResolveStaticMesh(unsigned int handle) const
+        {
+            if (handle == 0) return NULL;
+            if (((handle >> StaticMeshSlotBits) & 0xFFFu) != (m_resourceGeneration & 0xFFFu)) return NULL;
+            const size_t slot = static_cast<size_t>(handle & StaticMeshSlotMask) - 1;
+            if (slot >= m_staticMeshes.size()) return NULL;
+            const StaticMesh& mesh = m_staticMeshes[slot];
+            return mesh.alive ? &mesh : NULL;
+        }
         void EnsureVertexBufferCapacity(GLsizeiptr requiredBytes)
         {
             if (requiredBytes <= m_vertexBufferCapacity)
@@ -1140,8 +1372,31 @@ namespace
         bool m_texturaEnviadaConhecida;
         GLuint m_texturaEnviada;
         int m_blendModeEnviado;
+        // Uniformes do bloco de modelo/skinning. Antes eram reenviados
+        // incondicionalmente: 8 por Flush do caminho imediato (so para voltar ao
+        // neutro) e ~20 por malha em DrawStaticMesh. Malhas consecutivas do mesmo
+        // BMD compartilham quase todos.
+        bool  m_modeloEnviadoConhecido;
+        float m_modeloEnviado[16];
+        float m_drawColorEnviada[3];
+        int   m_skinningEnviado;
+        int   m_lightingEnviado;
+        float m_lightPositionEnviada[3];
+        float m_bodyScaleEnviado;
+        float m_postTranslationEnviada[3];
+        int   m_waveEnviado;
+        float m_worldTimeEnviado;
+        int   m_materialEffectEnviado;
+        int   m_shadowMapEnviado;
+        float m_bodyOriginEnviada[3];
+        float m_boneScaleEnviado;
+        bool  m_texturaUnidadeEnviada;
         Platform::LegacyRenderFrameStats m_frameStats;
-        std::map<const void*, StaticMesh> m_staticMeshes;
+        // Tabela de slots com free list: lookup O(1) por handle, sem comparacao
+        // de ponteiros nem alocacao por malha no caminho de desenho.
+        std::vector<StaticMesh> m_staticMeshes;
+        std::vector<size_t> m_staticMeshFreeList;
+        unsigned int m_resourceGeneration;
     };
 }
 

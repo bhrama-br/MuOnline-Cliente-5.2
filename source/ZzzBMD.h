@@ -1,6 +1,8 @@
 #ifndef __ZZZBMD_H__
 #define __ZZZBMD_H__
 
+#include <vector>
+
 #include "TextureScript.h"
 #include "Platform/LegacyRenderAdapter.h"
 
@@ -149,12 +151,17 @@ typedef struct _Mesh_t
     unsigned char* Commands; //ver1.1
 
     TextureScript* m_csTScript;
-    // Cache de geometria indexada para a Fase 1 de GPU skinning. Sao dados da
-    // bind pose; a paleta de ossos sera introduzida numa fase posterior.
+    // Staging da geometria indexada da bind pose. Estes arrays sao temporarios:
+    // existem so entre PrepareStaticGpuMesh e o upload, e sao liberados assim
+    // que a malha fica residente na GPU. Se o contexto cair, sao reconstruidos.
     Platform::StaticMeshVertex* GpuStaticVertices;
     unsigned int* GpuStaticIndices;
     int GpuStaticVertexCount;
     int GpuStaticIndexCount;
+    // Handle no cache do renderer. 0 = nao residente. Carrega a geracao do
+    // contexto grafico, entao um handle de um contexto morto se identifica como
+    // nao residente em vez de desenhar lixo.
+    unsigned int GpuMeshHandle;
 
     _Mesh_t()
     {
@@ -167,6 +174,7 @@ typedef struct _Mesh_t
         GpuStaticIndices = NULL;
         GpuStaticVertexCount = 0;
         GpuStaticIndexCount = 0;
+        GpuMeshHandle = 0;
 
         NumVertices = NumNormals = NumTexCoords =
             NumVertexColors = NumTriangles = 0;
@@ -228,6 +236,31 @@ public:
     vec3_t              GpuLightPosition;
     vec3_t              GpuPostTranslation;
 
+    // Snapshot do estado que o laco por vertice de Transform consome. Existe
+    // porque o trabalho pode ser adiado ate a primeira leitura de
+    // VertexTransform/NormalTransform/IntensityTransform, e nesse intervalo o
+    // chamador ja pode ter mexido em BodyScale, BodyOrigin ou LightEnable.
+    float               (*m_pendingBoneMatrix)[3][4];
+    // Copia propria da paleta. `BoneTransform` e uma global compartilhada: o
+    // objeto seguinte a animar ja a sobrescreveu quando a leitura adiada chega.
+    // Copiar NumBones*12 floats custa muito menos que o laco por vertice que
+    // estamos evitando.
+    std::vector<float>  m_pendingBoneStorage;
+    bool                m_pendingTranslate;
+    float               m_pendingScale;
+    float               m_pendingBoneScale;
+    float               m_pendingBodyScale;
+    bool                m_pendingLightEnable;
+    vec3_t              m_pendingBodyOrigin;
+    vec3_t              m_pendingLightPosition;
+    bool                m_verticesTransformed;
+    unsigned long       m_pendingFrame;
+    vec3_t              m_transformedBoundingMin;
+    vec3_t              m_transformedBoundingMax;
+    // Os arrays de transformacao sao globais e compartilhados por todos os BMD:
+    // quem chamou EnsureVerticesTransformed por ultimo e o dono do conteudo.
+    static BMD*         s_vertexTransformOwner;
+
     BMD() : NumBones(0), NumActions(0), NumMeshs(0),
         Meshs(NULL), Bones(NULL), Actions(NULL), Textures(NULL), IndexTexture(NULL)
     {
@@ -246,6 +279,19 @@ public:
         GpuBodyScale = 1.f;
         Vector(0.f, 0.f, 0.f, GpuLightPosition);
         Vector(0.f, 0.f, 0.f, GpuPostTranslation);
+        m_pendingBoneMatrix = NULL;
+        m_pendingTranslate = false;
+        m_pendingScale = 0.f;
+        m_pendingBoneScale = 1.f;
+        m_pendingBodyScale = 1.f;
+        m_pendingLightEnable = false;
+        Vector(0.f, 0.f, 0.f, m_pendingBodyOrigin);
+        Vector(0.f, 0.f, 0.f, m_pendingLightPosition);
+        m_verticesTransformed = false;
+        m_pendingFrame = 0;
+        Vector(0.f, 0.f, 0.f, m_transformedBoundingMin);
+        Vector(0.f, 0.f, 0.f, m_transformedBoundingMax);
+        fTransformedSize = 0.f;
     }
 
     ~BMD();
@@ -263,6 +309,10 @@ public:
     void Animation(float(*BoneTransform)[3][4], float AnimationFrame, float PriorAnimationFrame, unsigned short PriorAction, vec3_t Angle, vec3_t HeadAngle, bool Parent = false, bool Translate = true);
     void InterpolationTrans(float(*Mat1)[4], float(*TransMat2)[4], float _Scale);
     void Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t BoundingBoxMax, OBB_t* OBB, bool Translate = false, float _Scale = 0.0f);
+    // Executa o laco por vertice adiado por Transform. Chamada obrigatoria antes
+    // de ler VertexTransform/NormalTransform/IntensityTransform deste modelo.
+    void EnsureVerticesTransformed();
+    void TransformVertices();
     // Prepara somente dados para o shader; nao atualiza geometria CPU/OBB.
     void PrepareGpuRender(float(*BoneMatrix)[3][4], bool Translate = false, float _Scale = 0.0f);
     bool CanRenderBodyWithGpu(int renderFlags, float alpha, int blendMesh, float blendU, float blendV, int hiddenMesh = -1, int texture = -1) const;

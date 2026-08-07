@@ -1108,6 +1108,9 @@ bool CGM_Raklion::RenderObjectMesh(OBJECT* o, BMD* b, bool ExtraMon)
 
 	if(o->Type >= 6 && o->Type <= 12 )
 	{
+		// Ver comentario equivalente em GMNewTown: sobrescrever exige que o
+		// calculo adiado ja tenha rodado.
+		b->EnsureVerticesTransformed();
 		for(int i = 0; i < b->NumMeshs; i++)
 		{
 			Mesh_t *m = &b->Meshs[i];

@@ -110,6 +110,9 @@ namespace Platform
     private:
         std::vector<RenderCommand> m_commands;
         std::vector<RenderVertex> m_vertices;
+        // Buffer de fusao de comandos adjacentes com o mesmo material. Membro
+        // para preservar a capacidade entre frames.
+        std::vector<RenderVertex> m_mergedVertices;
         unsigned long m_nextSequence = 0;
     };
 

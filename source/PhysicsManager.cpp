@@ -1028,6 +1028,9 @@ BOOL CPhysicsClothMesh::Create( OBJECT *o, int iMesh, int iBone, DWORD dwType, i
 	m_iBMDType = ( iBMDType == -1) ? m_oOwner->Type : iBMDType;
 	BMD *b = &Models[m_iBMDType];
 	assert( iMesh < b->NumMeshs);
+	// O tecido nasce das posicoes ja transformadas; se Transform adiou o laco
+	// por vertice, ele precisa ser materializado antes desta leitura.
+	b->EnsureVerticesTransformed();
 	Mesh_t *pMesh = &b->Meshs[m_iMesh];
 
 	if( m_pVertices )
@@ -1193,6 +1196,7 @@ void CPhysicsClothMesh::SetFixedVertices( float Matrix[3][4])
 	}
 
 	BMD *b = &Models[m_iBMDType];
+	b->EnsureVerticesTransformed();
 	Mesh_t *pMesh = &b->Meshs[m_iMesh];
 	for ( int iVertex = 0; iVertex < m_iNumVertices; ++iVertex)
 	{
@@ -1244,6 +1248,10 @@ void CPhysicsClothMesh::InitForces( void)
 
 void CPhysicsClothMesh::Render( vec3_t *pvColor, int iLevel)
 {
+	// Este laco SOBRESCREVE o resultado da transformacao com a posicao simulada.
+	// Materializar antes garante que um Ensure posterior (em RenderMesh) seja um
+	// no-op e nao desfaca a simulacao.
+	Models[m_iBMDType].EnsureVerticesTransformed();
 	vec3_t vPos;
 	for ( int iVertex = 0; iVertex < m_iNumVertices; ++iVertex)
 	{

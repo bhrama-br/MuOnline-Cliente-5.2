@@ -51,6 +51,15 @@ namespace
     unsigned long g_GpuSkinningFrame = 0;
     char g_GpuSkinningModelWhitelist[512] = { 0 };
 
+    // Default por fase. Uma otimizacao entra aqui como Disabled e so vira
+    // Enabled depois de passar pelo modo Compare nas cenas de referencia.
+    Platform::RenderFeatureMode g_RenderFeatureModes[Platform::RenderFeatureCount] =
+    {
+        Platform::RenderFeatureDisabled,  // RenderFeatureInstancing
+        Platform::RenderFeatureDisabled,  // RenderFeatureStaticTransformCache
+        Platform::RenderFeatureDisabled   // RenderFeatureBatching
+    };
+
     bool IsWhitelistedGpuSkinningModel(int modelId)
     {
         if (modelId < 0 || g_GpuSkinningModelWhitelist[0] == 0)
@@ -129,6 +138,13 @@ void Platform::RecordGpuSkinningFallback(Platform::GpuSkinningFallbackReason rea
         g_LegacyRenderAdapter->RecordGpuSkinningFallback(reason);
 }
 
+void Platform::RecordCpuTransformWork(unsigned long long transformsExecuted, unsigned long long transformsSkipped,
+    unsigned long long animationsExecuted, unsigned long long animationsSkipped)
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->RecordCpuTransformWork(transformsExecuted, transformsSkipped, animationsExecuted, animationsSkipped);
+}
+
 void Platform::InvalidateLegacyRenderStateCache()
 {
     if (g_LegacyRenderAdapter != NULL)
@@ -182,6 +198,7 @@ void Platform::SetGpuSkinningModelWhitelist(const char* modelIds)
     g_GpuSkinningModelWhitelist[sizeof(g_GpuSkinningModelWhitelist) - 1] = 0;
 }
 void Platform::BeginGpuSkinningFrame() { ++g_GpuSkinningFrame; }
+unsigned long Platform::GetRenderFrameIndex() { return g_GpuSkinningFrame; }
 bool Platform::ShouldUseGpuSkinning()
 {
     if (g_GpuSkinningMode == GpuSkinningOff) return false;
@@ -192,4 +209,34 @@ bool Platform::ShouldUseGpuSkinningForModel(int modelId)
     if (!ShouldUseGpuSkinning()) return false;
     return g_GpuSkinningDeployment != GpuSkinningProductionWhitelist ||
         IsWhitelistedGpuSkinningModel(modelId);
+}
+
+void Platform::SetRenderFeatureMode(RenderFeature feature, RenderFeatureMode mode)
+{
+    if (feature < 0 || feature >= RenderFeatureCount) return;
+    g_RenderFeatureModes[feature] = mode;
+}
+
+Platform::RenderFeatureMode Platform::GetRenderFeatureMode(RenderFeature feature)
+{
+    if (feature < 0 || feature >= RenderFeatureCount) return RenderFeatureDisabled;
+    return g_RenderFeatureModes[feature];
+}
+
+bool Platform::IsRenderFeatureActive(RenderFeature feature)
+{
+    const RenderFeatureMode mode = GetRenderFeatureMode(feature);
+    if (mode == RenderFeatureDisabled) return false;
+    if (mode == RenderFeatureEnabled) return true;
+    return (g_GpuSkinningFrame & 1UL) == 0;
+}
+
+const char* Platform::GetRenderFeatureModeName(RenderFeature feature)
+{
+    switch (GetRenderFeatureMode(feature))
+    {
+    case RenderFeatureEnabled: return "on";
+    case RenderFeatureCompare: return "compare";
+    default: return "off";
+    }
 }

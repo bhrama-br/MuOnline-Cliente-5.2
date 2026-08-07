@@ -789,6 +789,9 @@ bool GMNewTown::RenderObject(OBJECT* pObject, BMD* pModel,bool ExtraMon)
 	// ¹è°æ
 	if ((pObject->Type>=5 && pObject->Type<=14) || pObject->Type == 4 || pObject->Type == 129)
 	{
+		// Materializa antes de sobrescrever: senao o Ensure preguicoso disparado
+		// mais tarde por RenderMesh recalcularia a iluminacao e apagaria isto.
+		pModel->EnsureVerticesTransformed();
 		Mesh_t *m = NULL;
 		for(int i = 0; i < pModel->NumMeshs; i++)
 		{
@@ -804,6 +807,7 @@ bool GMNewTown::RenderObject(OBJECT* pObject, BMD* pModel,bool ExtraMon)
 	else
 	if (World == WD_77NEW_LOGIN_SCENE)
 	{
+		pModel->EnsureVerticesTransformed();
 		Mesh_t *m = NULL;
 		for(int i = 0; i < pModel->NumMeshs; i++)
 		{

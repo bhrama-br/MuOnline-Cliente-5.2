@@ -40,6 +40,57 @@ vec3_t NormalTransform[MAX_MESH][MAX_VERTICES];
 float  IntensityTransform[MAX_MESH][MAX_VERTICES];
 vec3_t LightTransform[MAX_MESH][MAX_VERTICES];
 
+BMD* BMD::s_vertexTransformOwner = NULL;
+
+// Comparacao exata, nao hash: um falso positivo aqui congelaria a animacao de
+// um personagem, e nao ha teste barato que detecte isso em campo.
+//
+// bodyOrigin e bodyScale SAO parte da chave. Quando Translate esta ligado — o
+// caso normal de objeto de cenario — Animation assa a posicao e a escala do
+// mundo dentro de ParentMatrix, e dai dentro das matrizes de osso. Sem esses
+// dois campos, duas cercas iguais em posicoes diferentes batiam na chave e a
+// segunda herdava a posicao da primeira.
+struct AnimationPoseKey
+{
+    AnimationPoseKey()
+        : destination(NULL), model(NULL), currentAction(0), priorAction(0),
+          animationFrame(0.f), priorFrame(0.f), bodyHeight(0.f), bodyScale(0.f), parent(false), translate(false)
+    {
+        Vector(0.f, 0.f, 0.f, angle);
+        Vector(0.f, 0.f, 0.f, headAngle);
+        Vector(0.f, 0.f, 0.f, bodyOrigin);
+    }
+
+    bool operator==(const AnimationPoseKey& other) const
+    {
+        return destination == other.destination && model == other.model &&
+            currentAction == other.currentAction && priorAction == other.priorAction &&
+            animationFrame == other.animationFrame && priorFrame == other.priorFrame &&
+            bodyHeight == other.bodyHeight && bodyScale == other.bodyScale &&
+            parent == other.parent && translate == other.translate &&
+            angle[0] == other.angle[0] && angle[1] == other.angle[1] && angle[2] == other.angle[2] &&
+            headAngle[0] == other.headAngle[0] && headAngle[1] == other.headAngle[1] && headAngle[2] == other.headAngle[2] &&
+            bodyOrigin[0] == other.bodyOrigin[0] && bodyOrigin[1] == other.bodyOrigin[1] && bodyOrigin[2] == other.bodyOrigin[2];
+    }
+
+    float (*destination)[3][4];
+    const BMD* model;
+    unsigned short currentAction;
+    unsigned short priorAction;
+    float animationFrame;
+    float priorFrame;
+    float bodyHeight;
+    float bodyScale;
+    bool parent;
+    bool translate;
+    vec3_t angle;
+    vec3_t headAngle;
+    vec3_t bodyOrigin;
+};
+
+static AnimationPoseKey s_lastAnimationPose;
+static bool s_lastAnimationPoseValid = false;
+
 vec3_t RenderArrayVertices[MAX_VERTICES * 3];
 vec4_t RenderArrayColors[MAX_VERTICES * 3];
 vec2_t RenderArrayTexCoords[MAX_VERTICES * 3];
@@ -52,17 +103,11 @@ static void DrawLegacyVertexArray(const vec3_t* vertices, const vec4_t* colors, 
 {
     if (vertices == NULL || count <= 0) return;
 
-    Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-    renderer.Begin(Platform::LegacyPrimitiveTriangles);
-    for (int i = 0; i < count; ++i)
-    {
-        if (colors != NULL)
-            renderer.Color4f(colors[i][0], colors[i][1], colors[i][2], colors[i][3]);
-        if (texCoords != NULL)
-            renderer.TexCoord2f(texCoords[i][0], texCoords[i][1]);
-        renderer.Vertex3fv(vertices[i]);
-    }
-    renderer.End();
+    // Uma chamada virtual por desenho, nao quatro por vertice. Este era o maior
+    // emissor do frame: a medicao mostrou ~117 mil vertices por frame ainda
+    // passando de um em um pelo adaptador.
+    Platform::GetLegacyRenderAdapter().DrawVertexArrays(Platform::LegacyPrimitiveTriangles,
+        vertices, colors, texCoords, static_cast<size_t>(count));
 }
 
 // Cria uma unica vez a representacao indexada da bind pose. Este cache ainda
@@ -87,18 +132,28 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
     if (indexCount == 0) return false;
 
     // Os atributos BMD pertencem aos cantos do poligono, nao somente a
-    // `Vertex_t`. Expandir uma vez no cache preserva costuras de UV/normais e
-    // ainda deixa o IBO residente na GPU.
+    // `Vertex_t`. Expandir preserva costuras de UV/normais; deduplicar cantos
+    // com os tres indices identicos recupera o reuso de vertice sem desfazer
+    // costura nenhuma. Tipicamente 2,5-3x menos vertices em modelo organico.
     Platform::StaticMeshVertex* vertices = new Platform::StaticMeshVertex[indexCount];
     unsigned int* indices = new unsigned int[indexCount];
+    std::map<unsigned long long, unsigned int> cornerToVertex;
+    int uniqueVertices = 0;
     int outputIndex = 0;
     for (int triangleIndex = 0; triangleIndex < mesh.NumTriangles; ++triangleIndex)
     {
         const Triangle_t& triangle = mesh.Triangles[triangleIndex];
         const int polygon = triangle.Polygon;
         if (polygon != 3 && polygon != 4) { delete[]vertices; delete[]indices; return false; }
-        for (int corner = 0; corner < polygon; ++corner)
+        // Um quad vira dois triangulos com a mesma diagonal (0-1-2, 0-2-3) que a
+        // conversao legada usava, senao a silhueta de superficie nao-planar muda.
+        static const int quadOrder[6] = { 0, 1, 2, 0, 2, 3 };
+        static const int triOrder[3] = { 0, 1, 2 };
+        const int* order = (polygon == 4) ? quadOrder : triOrder;
+        const int cornerCount = (polygon == 4) ? 6 : 3;
+        for (int step = 0; step < cornerCount; ++step)
         {
+            const int corner = order[step];
             const int vertexIndex = triangle.VertexIndex[corner];
             const int normalIndex = triangle.NormalIndex[corner];
             const int texCoordIndex = triangle.TexCoordIndex[corner];
@@ -106,7 +161,21 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
                 texCoordIndex < 0 || texCoordIndex >= mesh.NumTexCoords || mesh.Vertices[vertexIndex].Node < 0 ||
                 mesh.Vertices[vertexIndex].Node >= boneCount || mesh.Normals[normalIndex].Node < 0 ||
                 mesh.Normals[normalIndex].Node >= boneCount) { delete[]vertices; delete[]indices; return false; }
-            Platform::StaticMeshVertex& output = vertices[outputIndex];
+
+            // NumVertices/NumNormals/NumTexCoords sao `short`, entao 16 bits por
+            // componente cobrem qualquer BMD valido sem colisao.
+            const unsigned long long cornerKey =
+                (static_cast<unsigned long long>(static_cast<unsigned short>(vertexIndex))) |
+                (static_cast<unsigned long long>(static_cast<unsigned short>(normalIndex)) << 16) |
+                (static_cast<unsigned long long>(static_cast<unsigned short>(texCoordIndex)) << 32);
+            std::map<unsigned long long, unsigned int>::const_iterator found = cornerToVertex.find(cornerKey);
+            if (found != cornerToVertex.end())
+            {
+                indices[outputIndex++] = found->second;
+                continue;
+            }
+
+            Platform::StaticMeshVertex& output = vertices[uniqueVertices];
             const Vertex_t& input = mesh.Vertices[vertexIndex];
             const Normal_t& normal = mesh.Normals[normalIndex];
             const TexCoord_t& texCoord = mesh.TexCoords[texCoordIndex];
@@ -118,15 +187,29 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
             output.positionBone = static_cast<float>(input.Node);
             output.normalBone = static_cast<float>(normal.Node);
             output.waveSeed = static_cast<float>(vertexIndex);
-            indices[outputIndex] = outputIndex;
-            ++outputIndex;
+            cornerToVertex[cornerKey] = static_cast<unsigned int>(uniqueVertices);
+            indices[outputIndex++] = static_cast<unsigned int>(uniqueVertices);
+            ++uniqueVertices;
         }
     }
     mesh.GpuStaticVertices = vertices;
     mesh.GpuStaticIndices = indices;
-    mesh.GpuStaticVertexCount = indexCount;
-    mesh.GpuStaticIndexCount = indexCount;
+    mesh.GpuStaticVertexCount = uniqueVertices;
+    mesh.GpuStaticIndexCount = outputIndex;
     return true;
+}
+
+// A geometria vive na GPU depois do upload; manter a copia de staging so
+// duplicaria a malha na RAM. Se o contexto cair, PrepareStaticGpuMesh a
+// reconstroi a partir do BMD, que continua carregado.
+static void ReleaseStaticGpuMeshStaging(Mesh_t& mesh)
+{
+    delete[]mesh.GpuStaticVertices;
+    delete[]mesh.GpuStaticIndices;
+    mesh.GpuStaticVertices = NULL;
+    mesh.GpuStaticIndices = NULL;
+    mesh.GpuStaticVertexCount = 0;
+    mesh.GpuStaticIndexCount = 0;
 }
 
 // Classificacao conservadora por corpo: apenas malhas comprovadamente opacas
@@ -196,6 +279,41 @@ void BMD::Animation(float(*BoneMatrix)[3][4], float AnimationFrame, float PriorF
         if (CurrentAnimationFrame >= Actions[CurrentAction].NumAnimationKeys)
             CurrentAnimationFrame = 0;
     }
+
+    // O laco de ossos e determinístico: mesma malha, mesmo buffer de destino e
+    // mesmas entradas produzem exatamente as mesmas matrizes. Cenario e o caso
+    // dominante — fileiras de cercas, paredes e pisos iguais compartilham a
+    // global BoneTransform e recalculariam a mesma pose objeto a objeto.
+    // A chave inclui o ponteiro de destino: se outro modelo escreveu naquele
+    // buffer, o registro nao bate e o laco roda normalmente.
+    if (Platform::IsRenderFeatureActive(Platform::RenderFeatureStaticTransformCache))
+    {
+        AnimationPoseKey key;
+        key.destination = BoneMatrix;
+        key.model = this;
+        key.currentAction = CurrentAction;
+        key.priorAction = PriorAction;
+        key.animationFrame = AnimationFrame;
+        key.priorFrame = PriorFrame;
+        key.bodyHeight = BodyHeight;
+        key.bodyScale = BodyScale;
+        key.parent = Parent;
+        key.translate = Translate;
+        VectorCopy(Angle, key.angle);
+        VectorCopy(HeadAngle, key.headAngle);
+        VectorCopy(BodyOrigin, key.bodyOrigin);
+
+        if (s_lastAnimationPoseValid && s_lastAnimationPose == key)
+        {
+            Platform::RecordCpuTransformWork(0, 0, 0, 1);
+            return;
+        }
+        s_lastAnimationPose = key;
+        s_lastAnimationPoseValid = true;
+    }
+    else
+        s_lastAnimationPoseValid = false;
+    Platform::RecordCpuTransformWork(0, 0, 1, 0);
 
     // bones
     for (int i = 0; i < NumBones; i++)
@@ -393,16 +511,110 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
         VectorIRotate(Position, Matrix, LightPosition);
     }
     VectorCopy(LightPosition, GpuLightPosition);
+
+    // A partir daqui so ha trabalho por vertice, e ele produz exclusivamente
+    // VertexTransform/NormalTransform/IntensityTransform. Quem desenha pela GPU
+    // nao le nenhum dos tres, entao o custo e adiado ate alguem realmente
+    // precisar. O snapshot existe porque o chamador pode mexer em BodyScale,
+    // BodyOrigin, BoneScale e LightEnable entre o Transform e a leitura.
+    m_pendingBoneMatrix = BoneMatrix;
+    m_pendingTranslate = Translate;
+    m_pendingScale = _Scale;
+    m_pendingBoneScale = BoneScale;
+    m_pendingBodyScale = BodyScale;
+    m_pendingLightEnable = LightEnable;
+    VectorCopy(BodyOrigin, m_pendingBodyOrigin);
+    VectorCopy(LightPosition, m_pendingLightPosition);
+    m_verticesTransformed = false;
+    m_pendingFrame = Platform::GetRenderFrameIndex();
+
+    // EditFlag == 2 usa o bounding box calculado a partir dos vertices logo
+    // abaixo, entao esse caso nunca pode ser adiado.
+    if (EditFlag == 2 || !Platform::IsRenderFeatureActive(Platform::RenderFeatureStaticTransformCache))
+    {
+        TransformVertices();
+    }
+    else
+    {
+        const size_t paletteFloats = static_cast<size_t>(NumBones) * 12;
+        if (paletteFloats > 0 && BoneMatrix != NULL)
+        {
+            if (m_pendingBoneStorage.size() != paletteFloats)
+                m_pendingBoneStorage.resize(paletteFloats);
+            memcpy(&m_pendingBoneStorage[0], BoneMatrix, paletteFloats * sizeof(float));
+            m_pendingBoneMatrix = reinterpret_cast<float(*)[3][4]>(&m_pendingBoneStorage[0]);
+        }
+        else
+            m_pendingBoneMatrix = NULL;
+        Platform::RecordCpuTransformWork(0, 1, 0, 0);
+    }
+
+    if (EditFlag == 2)
+    {
+        VectorCopy(m_transformedBoundingMin, OBB->StartPos);
+        OBB->XAxis[0] = (m_transformedBoundingMax[0] - m_transformedBoundingMin[0]);
+        OBB->YAxis[1] = (m_transformedBoundingMax[1] - m_transformedBoundingMin[1]);
+        OBB->ZAxis[2] = (m_transformedBoundingMax[2] - m_transformedBoundingMin[2]);
+    }
+    else
+    {
+        VectorCopy(BoundingBoxMin, OBB->StartPos);
+        OBB->XAxis[0] = (BoundingBoxMax[0] - BoundingBoxMin[0]);
+        OBB->YAxis[1] = (BoundingBoxMax[1] - BoundingBoxMin[1]);
+        OBB->ZAxis[2] = (BoundingBoxMax[2] - BoundingBoxMin[2]);
+    }
+    VectorAdd(OBB->StartPos, BodyOrigin, OBB->StartPos);
+    OBB->XAxis[1] = 0.f;
+    OBB->XAxis[2] = 0.f;
+    OBB->YAxis[0] = 0.f;
+    OBB->YAxis[2] = 0.f;
+    OBB->ZAxis[0] = 0.f;
+    OBB->ZAxis[1] = 0.f;
+}
+
+// Materializa VertexTransform/NormalTransform/IntensityTransform a partir do
+// snapshot deixado por Transform. Idempotente por frame e barata quando ja
+// valida: um teste de dono mais um bool.
+void BMD::EnsureVerticesTransformed()
+{
+    // Com a otimizacao desligada, Transform ja rodou o laco de forma ansiosa e
+    // o comportamento tem que ser identico ao legado, inclusive em quem e o dono
+    // dos arrays globais. Nao reprocessar nada aqui.
+    if (!Platform::IsRenderFeatureActive(Platform::RenderFeatureStaticTransformCache))
+        return;
+    if (m_verticesTransformed && s_vertexTransformOwner == this)
+        return;
+    // Se o snapshot nao e deste frame, este modelo nao foi transformado agora:
+    // ha caminhos legados que desenham lendo o que o ultimo Transform deixou nos
+    // arrays globais. Recalcular com um snapshot velho inventaria geometria que
+    // o caminho ansioso nunca produziria. Nao mexer preserva o comportamento.
+    if (m_pendingFrame != Platform::GetRenderFrameIndex())
+        return;
+    TransformVertices();
+}
+
+void BMD::TransformVertices()
+{
+    if (m_pendingBoneMatrix == NULL)
+        return;
+
+    float(*BoneMatrix)[3][4] = m_pendingBoneMatrix;
+    const bool Translate = m_pendingTranslate;
+    const float _Scale = m_pendingScale;
+    const float boneScale = m_pendingBoneScale;
+    const float bodyScale = m_pendingBodyScale;
+    const bool lightEnable = m_pendingLightEnable;
+    const float* LightPosition = m_pendingLightPosition;
+
+    s_vertexTransformOwner = this;
+    m_verticesTransformed = true;
+    Platform::RecordCpuTransformWork(1, 0, 0, 0);
+
     vec3_t BoundingMin;
     vec3_t BoundingMax;
-#ifdef _DEBUG
-#else
-    if (EditFlag == 2)
-#endif
-    {
-        Vector(999999.f, 999999.f, 999999.f, BoundingMin);
-        Vector(-999999.f, -999999.f, -999999.f, BoundingMax);
-    }
+    Vector(999999.f, 999999.f, 999999.f, BoundingMin);
+    Vector(-999999.f, -999999.f, -999999.f, BoundingMax);
+
     for (int i = 0; i < NumMeshs; i++)
     {
         Mesh_t* m = &Meshs[i];
@@ -412,7 +624,7 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
             Vertex_t* v = &m->Vertices[j];
             float* vp = VertexTransform[i][j];
 
-            if (BoneScale == 1.f)
+            if (boneScale == 1.f)
             {
                 if (_Scale)
                 {
@@ -424,16 +636,16 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
                 else
                     VectorTransform(v->Position, BoneMatrix[v->Node], vp);
                 if (Translate)
-                    VectorScale(vp, BodyScale, vp);
+                    VectorScale(vp, bodyScale, vp);
             }
             else
             {
                 VectorRotate(v->Position, BoneMatrix[v->Node], vp);
-                vp[0] = vp[0] * BoneScale + BoneMatrix[v->Node][0][3];
-                vp[1] = vp[1] * BoneScale + BoneMatrix[v->Node][1][3];
-                vp[2] = vp[2] * BoneScale + BoneMatrix[v->Node][2][3];
+                vp[0] = vp[0] * boneScale + BoneMatrix[v->Node][0][3];
+                vp[1] = vp[1] * boneScale + BoneMatrix[v->Node][1][3];
+                vp[2] = vp[2] * boneScale + BoneMatrix[v->Node][2][3];
                 if (Translate)
-                    VectorScale(vp, BodyScale, vp);
+                    VectorScale(vp, bodyScale, vp);
             }
 #ifdef _DEBUG
 #else
@@ -447,7 +659,7 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
                 }
             }
             if (Translate)
-                VectorAdd(vp, BodyOrigin, vp);
+                VectorAdd(vp, m_pendingBodyOrigin, vp);
         }
 
         for (int j = 0; j < m->NumNormals; j++)
@@ -455,7 +667,7 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
             Normal_t* sn = &m->Normals[j];
             float* tn = NormalTransform[i][j];
             VectorRotate(sn->Normal, BoneMatrix[sn->Node], tn);
-            if (LightEnable)
+            if (lightEnable)
             {
                 float Luminosity;
                 Luminosity = DotProduct(tn, LightPosition) * 0.8f + 0.4f;
@@ -465,30 +677,11 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
             }
         }
     }
-    if (EditFlag == 2)
-    {
-        VectorCopy(BoundingMin, OBB->StartPos);
-        OBB->XAxis[0] = (BoundingMax[0] - BoundingMin[0]);
-        OBB->YAxis[1] = (BoundingMax[1] - BoundingMin[1]);
-        OBB->ZAxis[2] = (BoundingMax[2] - BoundingMin[2]);
-    }
-    else
-    {
-        VectorCopy(BoundingBoxMin, OBB->StartPos);
-        OBB->XAxis[0] = (BoundingBoxMax[0] - BoundingBoxMin[0]);
-        OBB->YAxis[1] = (BoundingBoxMax[1] - BoundingBoxMin[1]);
-        OBB->ZAxis[2] = (BoundingBoxMax[2] - BoundingBoxMin[2]);
-    }
+
+    VectorCopy(BoundingMin, m_transformedBoundingMin);
+    VectorCopy(BoundingMax, m_transformedBoundingMax);
     fTransformedSize = max(max(BoundingMax[0] - BoundingMin[0], BoundingMax[1] - BoundingMin[1]),
         BoundingMax[2] - BoundingMin[2]);
-    //fTransformedSize *= 0.3f;
-    VectorAdd(OBB->StartPos, BodyOrigin, OBB->StartPos);
-    OBB->XAxis[1] = 0.f;
-    OBB->XAxis[2] = 0.f;
-    OBB->YAxis[0] = 0.f;
-    OBB->YAxis[2] = 0.f;
-    OBB->ZAxis[0] = 0.f;
-    OBB->ZAxis[1] = 0.f;
 }
 
 // vResultPosition = (BoneTransformMatrix * vRelativePosition) * BMD::BodyScale + vObjectPosition;
@@ -948,6 +1141,7 @@ void SmoothBitmap(int Width, int Height, unsigned char* Buffer)
 
 bool BMD::CollisionDetectLineToMesh(vec3_t Position, vec3_t Target, bool Collision, int Mesh, int Triangle)
 {
+    EnsureVerticesTransformed();
     int i, j;
     for (i = 0; i < NumMeshs; i++)
     {
@@ -973,6 +1167,7 @@ bool BMD::CollisionDetectLineToMesh(vec3_t Position, vec3_t Target, bool Collisi
 
 void BMD::CreateLightMapSurface(Light_t* lp, Mesh_t* m, int i, int j, int MapWidth, int MapHeight, int MapWidthMax, int MapHeightMax, vec3_t BoundingMin, vec3_t BoundingMax, int Axis)
 {
+    EnsureVerticesTransformed();
     int k, l;
     Triangle_t* tp = &m->Triangles[j];
     float* np = NormalTransform[i][tp->NormalIndex[0]];
@@ -1114,6 +1309,7 @@ void BMD::BeginRenderCoinHeap()
 
 int BMD::AddToCoinHeap(int coinIndex, int target_vertex_index)
 {
+    EnsureVerticesTransformed();
     const auto vertices = RenderArrayVertices;
     const auto colors = RenderArrayColors;
     const auto texCoords = RenderArrayTexCoords;
@@ -1229,12 +1425,25 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         && blendMeshTextureCoordU == 0.f && blendMeshTextureCoordV == 0.f
         && gpuScriptCompatible && !m->NoneBlendMesh && gpuTexture != NULL
         && (gpuTexture->Components == 3 || gpuTexture->Components == 4);
-    const bool gpuMeshPrepared = staticGpuCandidate && PrepareStaticGpuMesh(*m, GpuBoneMatrixCount);
+    // A geometria so e reconstruida quando o handle nao esta residente: em regime
+    // permanente isto e um teste de geracao, sem tocar no BMD nem alocar nada.
+    bool gpuMeshPrepared = false;
+    if (staticGpuCandidate)
+    {
+        Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+        if (renderer.IsStaticMeshResident(m->GpuMeshHandle))
+            gpuMeshPrepared = true;
+        else if (PrepareStaticGpuMesh(*m, GpuBoneMatrixCount))
+        {
+            m->GpuMeshHandle = renderer.UploadStaticMesh(m->GpuStaticVertices, m->GpuStaticVertexCount,
+                m->GpuStaticIndices, m->GpuStaticIndexCount);
+            ReleaseStaticGpuMeshStaging(*m);
+            gpuMeshPrepared = m->GpuMeshHandle != 0;
+        }
+    }
     if (gpuMeshPrepared)
     {
         Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-        if (renderer.UploadStaticMesh(m, m->GpuStaticVertices, m->GpuStaticVertexCount,
-            m->GpuStaticIndices, m->GpuStaticIndexCount))
         {
             BindTexture(gpuTextureIndex);
             const bool gpuBlendMesh = blendMeshIndex <= -2 || m->Texture == blendMeshIndex;
@@ -1262,7 +1471,7 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
                 renderer.BindTexture(gpuTexture->TextureNumber);
             const float blendLight = gpuBlendMesh ? blendMeshAlpha : 1.f;
             const float color[4] = { BodyLight[0] * blendLight, BodyLight[1] * blendLight, BodyLight[2] * blendLight, alpha };
-            if (renderer.DrawStaticMesh(m, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
+            if (renderer.DrawStaticMesh(m->GpuMeshHandle, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
                 GpuBodyScale, gpuMaterialEffect == 0 && LightEnable && !gpuBlendMesh, GpuLightPosition, GpuPostTranslation,
                 (renderFlags & RENDER_WAVE) != 0, static_cast<float>(WorldTime), gpuMaterialEffect,
                 (renderFlags & RENDER_SHADOWMAP) != 0, BodyOrigin, BoneScale))
@@ -1276,6 +1485,11 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
             ? Platform::GpuSkinningFallbackGeometry
             : (!staticGpuCandidate ? Platform::GpuSkinningFallbackMaterial : Platform::GpuSkinningFallbackResource));
     }
+
+    // Daqui para baixo e o caminho legado, que le VertexTransform e companhia.
+    // O caminho GPU acima ja retornou, entao este e o ponto exato em que o
+    // trabalho por vertice deixa de poder ser adiado.
+    EnsureVerticesTransformed();
 
     // Primeiro recorte da migracao para a fila global: somente a malha BMD
     // sem blend, alpha-test, animacao de UV ou script. Todo o resto descarrega
@@ -1725,6 +1939,9 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
 void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFlag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int MeshTexture)
 {
     if (i >= NumMeshs || i < 0) return;
+    // Sem caminho GPU: tanto a fila de opacos quanto o legado leem os vertices
+    // ja transformados.
+    EnsureVerticesTransformed();
 
     // Sem extensao alternativa, os parametros sao os mesmos do caminho
     // principal. Reutilizar RenderMesh permite que a malha residente use GPU
@@ -2126,6 +2343,9 @@ void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFl
 void BMD::RenderMeshEffect(int i, int iType, int iSubType, vec3_t Angle, VOID* obj)
 {
     if (i >= NumMeshs || i < 0) return;
+    // Efeitos nascem em posicoes de vertice ja transformadas; nao ha caminho
+    // GPU aqui, entao o trabalho e sempre necessario.
+    EnsureVerticesTransformed();
 
     Mesh_t* m = &Meshs[i];
     if (m->NumTriangles <= 0) return;
@@ -2427,6 +2647,7 @@ void BMD::RenderBodyAlternative(int iRndExtFlag, int iParam, int Flag, float Alp
 void BMD::RenderMeshTranslate(int i, int RenderFlag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int MeshTexture)
 {
     if (i >= NumMeshs || i < 0) return;
+    EnsureVerticesTransformed();
 
     Mesh_t* m = &Meshs[i];
     if (m->NumTriangles == 0) return;
@@ -2840,6 +3061,9 @@ void BMD::AddClothesShadowTriangles(void* pClothes, const int clothesCount, cons
 
 void BMD::AddMeshShadowTriangles(const int blendMesh, const int hiddenMesh, const int startMesh, const int endMesh, const float sx, const float sy) const
 {
+    // O const aqui e sobre o BMD como fonte de geometria; materializar o cache
+    // de transformacao nao altera nada que o chamador observe.
+    const_cast<BMD*>(this)->EnsureVerticesTransformed();
     auto vertices = RenderArrayVertices;
     int target_vertex_index = -1;
 
@@ -3094,13 +3318,9 @@ void BMD::Release()
             delete[]m->Normals;
             delete[]m->TexCoords;
             delete[]m->Triangles;
-            Platform::GetLegacyRenderAdapter().ReleaseStaticMesh(m);
-            delete[]m->GpuStaticVertices;
-            delete[]m->GpuStaticIndices;
-            m->GpuStaticVertices = NULL;
-            m->GpuStaticIndices = NULL;
-            m->GpuStaticVertexCount = 0;
-            m->GpuStaticIndexCount = 0;
+            Platform::GetLegacyRenderAdapter().ReleaseStaticMesh(m->GpuMeshHandle);
+            m->GpuMeshHandle = 0;
+            ReleaseStaticGpuMeshStaging(*m);
 
             if (m->m_csTScript)
             {

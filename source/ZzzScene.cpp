@@ -70,8 +70,73 @@
 #include <chrono>
 #include <stdio.h>
 
-static DWORD g_renderStatsStart = 0;
-static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuMs);
+// GetTickCount tem granularidade de ~15,6 ms: um frame de 5 ms era medido como
+// 0 ou 16, e a media dizia mais sobre o tick do relogio do que sobre o frame.
+//
+// steady_clock em vez de QueryPerformanceCounter: o alvo Web (Emscripten) nao
+// tem a API do Windows, e o plano se comprometeu a manter os dois alvos
+// compilando. As unidades sao microssegundos em todo o caminho.
+static long long g_renderStatsStart = 0;
+static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuUs);
+
+static long long RenderStatsNowMicroseconds()
+{
+	return std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static DWORD RenderStatsElapsedMicroseconds()
+{
+	if (g_renderStatsStart == 0) return 0;
+	const long long elapsed = RenderStatsNowMicroseconds() - g_renderStatsStart;
+	return elapsed > 0 ? static_cast<DWORD>(elapsed) : 0;
+}
+
+// Reparticao do frame. Duas otimizacoes grandes (70% menos skinning de CPU e 12
+// mil glUniform a menos por frame) nao moveram o total, o que so pode significar
+// que o custo esta em outro lugar. Medir por bloco e mais barato que continuar
+// adivinhando.
+enum RenderPhaseId
+{
+	RenderPhaseTerrain,
+	RenderPhaseObjects,
+	RenderPhaseCharacters,
+	RenderPhaseEffects,
+	RenderPhaseSprites,
+	// A primeira medicao mostrou 76% do frame fora dos cinco blocos acima.
+	// Estes cobrem o resto: simulacao, selecao, preparo de frame e o miudo.
+	RenderPhaseSimulation,
+	RenderPhaseSelect,
+	RenderPhaseSetup,
+	RenderPhaseMisc,
+	RenderPhaseCount
+};
+
+static long long g_renderPhaseUs[RenderPhaseCount] = { 0 };
+
+struct ScopedRenderPhase
+{
+	explicit ScopedRenderPhase(RenderPhaseId id) : m_id(id), m_start(RenderStatsNowMicroseconds()) {}
+	~ScopedRenderPhase() { g_renderPhaseUs[m_id] += RenderStatsNowMicroseconds() - m_start; }
+	RenderPhaseId m_id;
+	long long m_start;
+};
+
+// `-<feature>=off|on|compare`. Ausente mantem o default compilado da fase, que
+// e Disabled ate a otimizacao ter passado pelas cenas de referencia.
+static void ParseRenderFeatureFlag(const char* commandLine, const char* prefix, Platform::RenderFeature feature)
+{
+	const char* argument = ::strstr(commandLine, prefix);
+	if (argument == NULL)
+		return;
+	argument += strlen(prefix);
+	if (::strncmp(argument, "off", 3) == 0)
+		Platform::SetRenderFeatureMode(feature, Platform::RenderFeatureDisabled);
+	else if (::strncmp(argument, "compare", 7) == 0)
+		Platform::SetRenderFeatureMode(feature, Platform::RenderFeatureCompare);
+	else if (::strncmp(argument, "on", 2) == 0)
+		Platform::SetRenderFeatureMode(feature, Platform::RenderFeatureEnabled);
+}
 #include "Interfaces.h"
 #include "Camera3D.h"
 #include "CharacterList.h"
@@ -2169,9 +2234,11 @@ bool RenderMainScene()
 		glClearColor(0/256.f,0/256.f,0/256.f,1.f);
 	}
 
-	BeginOpengl(0, 0, (m_Resolution > 2 ? GetWindowsX : Width), GetWindowsY);
-
-	CreateFrustrum((float)Width/(float)640, pos);
+	{
+		ScopedRenderPhase phase(RenderPhaseSetup);
+		BeginOpengl(0, 0, (m_Resolution > 2 ? GetWindowsX : Width), GetWindowsY);
+		CreateFrustrum((float)Width/(float)640, pos);
+	}
 
     if ( gMapManager.InBattleCastle() )
     {
@@ -2200,40 +2267,63 @@ bool RenderMainScene()
         {
 			if(gMapManager.IsPKField() || IsDoppelGanger2())
 			{
+				ScopedRenderPhase phase(RenderPhaseObjects);
 				RenderObjects();
 			}
-            RenderTerrain(false);
+			{
+				ScopedRenderPhase phase(RenderPhaseTerrain);
+				RenderTerrain(false);
+			}
         }
     }
 
 	if(!gMapManager.IsPKField()	&& !IsDoppelGanger2())
+	{
+		ScopedRenderPhase phase(RenderPhaseObjects);
 		RenderObjects();
+	}
 
-	RenderEffectShadows();
-   	RenderBoids(); 
+	{
+		ScopedRenderPhase phase(RenderPhaseEffects);
+		RenderEffectShadows();
+	}
+   	RenderBoids();
 
-	RenderCharactersClient();
+	{
+		ScopedRenderPhase phase(RenderPhaseCharacters);
+		RenderCharactersClient();
+	}
 
 	if(EditFlag!=EDIT_NONE)
 	{
+		ScopedRenderPhase phase(RenderPhaseTerrain);
 		RenderTerrain(true);
     }
-    if(!CameraTopViewEnable)
-     	RenderItems();
+	{
+		ScopedRenderPhase phase(RenderPhaseMisc);
+		if(!CameraTopViewEnable)
+			RenderItems();
 
-   	RenderFishs();
-   	RenderBugs();
-    RenderLeaves();
+		RenderFishs();
+		RenderBugs();
+		RenderLeaves();
 
-	if (!gMapManager.InChaosCastle())
-		ThePetProcess().RenderPets();
+		if (!gMapManager.InChaosCastle())
+			ThePetProcess().RenderPets();
 
-	RenderBoids(true);
-	RenderObjects_AfterCharacter();
+		RenderBoids(true);
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseObjects);
+		RenderObjects_AfterCharacter();
+	}
 
-    RenderJoints(byWaterMap);
-	RenderEffects();
-    RenderBlurs();
+	{
+		ScopedRenderPhase phase(RenderPhaseEffects);
+		RenderJoints(byWaterMap);
+		RenderEffects();
+		RenderBlurs();
+	}
     CheckSprites();
     BeginSprite();
 
@@ -2252,17 +2342,23 @@ bool RenderMainScene()
 		RenderLeaves();
 	}
 
-	RenderSprites();
-	RenderParticles();
+	{
+		ScopedRenderPhase phase(RenderPhaseSprites);
+		RenderSprites();
+		RenderParticles();
 
-    if ( IsWaterTerrain()==false )
-    {
-        RenderPoints ( byWaterMap );
-    }
+		if ( IsWaterTerrain()==false )
+		{
+			RenderPoints ( byWaterMap );
+		}
+	}
 
     EndSprite();
 
-	RenderAfterEffects();
+	{
+		ScopedRenderPhase phase(RenderPhaseEffects);
+		RenderAfterEffects();
+	}
 
     if(IsWaterTerrain() == true)
     {
@@ -2305,8 +2401,11 @@ bool RenderMainScene()
         }
     }
 
-    SelectObjects();
-	BeginBitmap();	
+	{
+		ScopedRenderPhase phase(RenderPhaseSelect);
+		SelectObjects();
+	}
+	BeginBitmap();
     RenderObjectDescription();
 	
 	if(CameraTopViewEnable == false)
@@ -2541,7 +2640,7 @@ void MainScene(HDC hDC)
 		const bool writeRenderStatsCsv = (::strstr(::GetCommandLineA(), "-renderstatscsv") != NULL);
 		const Platform::LegacyRenderFrameStats renderStats = Platform::GetLegacyRenderFrameStats();
 		if (writeRenderStatsCsv)
-			CaptureRenderStatsCsv(renderStats, GetTickCount() - g_renderStatsStart);
+			CaptureRenderStatsCsv(renderStats, RenderStatsElapsedMicroseconds());
 		BeginBitmap();
 		unicode::t_char szDebugText[128];
 		unicode::_sprintf(szDebugText, "FPS : %.1f Connected: %d", FPS, g_bGameServerConnected);
@@ -2937,20 +3036,30 @@ bool CheckRenderNextFrame()
 
 // Grava uma amostra agregada, e nao um registro por frame. O aquecimento evita
 // que loading/recriacao de recursos contamine a comparacao entre cenas.
-static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuMs)
+static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuUs)
 {
 	struct CaptureState
 	{
 		CaptureState() : scene(-1), world(-1), width(0), height(0), glslBackend(false), warmup(0), frames(0), cpuTotal(0),
 			draws(0), vertices(0), vboBytes(0), bufferData(0), bufferSubData(0), flushes(0), textureUploads(0),
 			textureBytes(0), textureChanges(0), matrixFlushes(0), textureFlushes(0), blendFlushes(0), depthFlushes(0),
-			alphaFlushes(0), fogFlushes(0), gpuMeshDraws(0), gpuMeshIndices(0), gpuMeshUploadBytes(0), bonePaletteBytes(0), cpuSkinningVertices(0), cpuSkinningNormals(0), gpuSkinningFallbacks(0), gpuSkinningMaterialFallbacks(0), gpuSkinningGeometryFallbacks(0), gpuSkinningResourceFallbacks(0) {}
+			alphaFlushes(0), fogFlushes(0), gpuMeshDraws(0), gpuMeshIndices(0), gpuMeshUploadBytes(0), bonePaletteBytes(0), cpuSkinningVertices(0), cpuSkinningNormals(0), gpuSkinningFallbacks(0), gpuSkinningMaterialFallbacks(0), gpuSkinningGeometryFallbacks(0), gpuSkinningResourceFallbacks(0),
+			instancedDraws(0), instancesSubmitted(0), instanceBatches(0), largestInstanceBatch(0), instancePaletteDedupHits(0),
+			meshCacheHits(0), meshCacheMisses(0), meshVerticesResident(0), meshIndicesResident(0),
+			transformsExecuted(0), transformsSkipped(0), animationsExecuted(0), animationsSkipped(0), uniformCallsSaved(0)
+		{
+			for (int i = 0; i < RenderPhaseCount; ++i) phaseUs[i] = 0;
+		}
+		unsigned long long phaseUs[RenderPhaseCount];
 		int scene, world, width, height;
 		bool glslBackend;
 		unsigned int warmup, frames;
 		unsigned long long cpuTotal, draws, vertices, vboBytes, bufferData, bufferSubData, flushes, textureUploads,
 			textureBytes, textureChanges, matrixFlushes, textureFlushes, blendFlushes, depthFlushes, alphaFlushes, fogFlushes,
-			gpuMeshDraws, gpuMeshIndices, gpuMeshUploadBytes, bonePaletteBytes, cpuSkinningVertices, cpuSkinningNormals, gpuSkinningFallbacks, gpuSkinningMaterialFallbacks, gpuSkinningGeometryFallbacks, gpuSkinningResourceFallbacks;
+			gpuMeshDraws, gpuMeshIndices, gpuMeshUploadBytes, bonePaletteBytes, cpuSkinningVertices, cpuSkinningNormals, gpuSkinningFallbacks, gpuSkinningMaterialFallbacks, gpuSkinningGeometryFallbacks, gpuSkinningResourceFallbacks,
+			instancedDraws, instancesSubmitted, instanceBatches, largestInstanceBatch, instancePaletteDedupHits,
+			meshCacheHits, meshCacheMisses, meshVerticesResident, meshIndicesResident,
+			transformsExecuted, transformsSkipped, animationsExecuted, animationsSkipped, uniformCallsSaved;
 		DWORD cpuSamples[120];
 	};
 	static CaptureState state;
@@ -2970,8 +3079,8 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		return;
 
 	const unsigned int sample = state.frames++;
-	state.cpuSamples[sample] = renderCpuMs;
-	state.cpuTotal += renderCpuMs;
+	state.cpuSamples[sample] = renderCpuUs;
+	state.cpuTotal += renderCpuUs;
 	state.draws += stats.drawCalls; state.vertices += stats.vertices; state.vboBytes += stats.vertexUploadBytes;
 	state.bufferData += stats.bufferDataCalls; state.bufferSubData += stats.bufferSubDataCalls; state.flushes += stats.batchFlushes;
 	state.textureUploads += stats.textureUploads; state.textureBytes += stats.textureUploadBytes; state.textureChanges += stats.textureChanges;
@@ -2984,6 +3093,19 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 	state.gpuSkinningMaterialFallbacks += stats.gpuSkinningMaterialFallbacks;
 	state.gpuSkinningGeometryFallbacks += stats.gpuSkinningGeometryFallbacks;
 	state.gpuSkinningResourceFallbacks += stats.gpuSkinningResourceFallbacks;
+	state.instancedDraws += stats.instancedDrawCalls; state.instancesSubmitted += stats.instancesSubmitted;
+	state.instanceBatches += stats.instanceBatchesFlushed; state.instancePaletteDedupHits += stats.instancePaletteDedupHits;
+	// Pico, nao soma: a media de um maximo por frame nao diria nada sobre a
+	// fragmentacao da chave de lote.
+	if (stats.largestInstanceBatch > state.largestInstanceBatch)
+		state.largestInstanceBatch = stats.largestInstanceBatch;
+	state.meshCacheHits += stats.staticMeshCacheHits; state.meshCacheMisses += stats.staticMeshCacheMisses;
+	state.meshVerticesResident += stats.staticMeshVerticesResident; state.meshIndicesResident += stats.staticMeshIndicesResident;
+	state.transformsExecuted += stats.transformsExecuted; state.transformsSkipped += stats.transformsSkipped;
+	state.animationsExecuted += stats.animationsExecuted; state.animationsSkipped += stats.animationsSkipped;
+	state.uniformCallsSaved += stats.uniformCallsSaved;
+	for (int i = 0; i < RenderPhaseCount; ++i)
+		state.phaseUs[i] += static_cast<unsigned long long>(g_renderPhaseUs[i] > 0 ? g_renderPhaseUs[i] : 0);
 	if (state.frames < 120)
 		return;
 
@@ -2993,25 +3115,47 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		for (int j = i + 1; j < 120; ++j)
 			if (sortedCpu[j] < sortedCpu[i]) { const DWORD value = sortedCpu[i]; sortedCpu[i] = sortedCpu[j]; sortedCpu[j] = value; }
 
-	// A versao 2 evita misturar as linhas antigas, que nao possuíam a coluna
-	// de backend, com as capturas comparativas da Fase 8.
-	FILE* file = fopen("RenderPerformance_v5.csv", "a+");
+	// A v6 acrescenta as colunas de instancing, cache de malha e cache de pose.
+	// Arquivo novo em vez de colunas extras no v5: misturar linhas de larguras
+	// diferentes quebraria qualquer leitor de CSV usado nas comparacoes.
+	FILE* file = fopen("RenderPerformance_v9.csv", "a+");
 	if (file != NULL)
 	{
 		fseek(file, 0, SEEK_END);
 		if (ftell(file) == 0)
-			fprintf(file, "scene,world,resolution,backend,gpu_skinning,frames,cpu_ms_avg,cpu_ms_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg\n");
+			fprintf(file, "scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup,us_misc,us_unmeasured\n");
 		const char* skinningMode = Platform::GetGpuSkinningMode() == Platform::GpuSkinningOff ? "off" :
 			(Platform::GetGpuSkinningMode() == Platform::GpuSkinningCompare ? "compare" : "on");
-		fprintf(file, "%d,%d,%dx%d,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
-			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode, state.cpuTotal / 120.0, static_cast<unsigned long>(sortedCpu[113]),
+		// Coluna explicita para o que ainda escapa das fases. Calcular aqui evita
+		// que a leitura da planilha tenha que refazer a subtracao toda vez.
+		double medidoRestante = static_cast<double>(state.cpuTotal);
+		for (int i = 0; i < RenderPhaseCount; ++i)
+			medidoRestante -= static_cast<double>(state.phaseUs[i]);
+		if (medidoRestante < 0.0) medidoRestante = 0.0;
+		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode,
+			Platform::GetRenderFeatureModeName(Platform::RenderFeatureInstancing),
+			Platform::GetRenderFeatureModeName(Platform::RenderFeatureStaticTransformCache),
+			Platform::GetRenderFeatureModeName(Platform::RenderFeatureBatching),
+			state.cpuTotal / 120.0, static_cast<unsigned long>(sortedCpu[113]),
 			state.draws / 120.0, state.vertices / 120.0, state.vboBytes / (120.0 * 1024.0), state.bufferData / 120.0,
 			state.bufferSubData / 120.0, state.flushes / 120.0, state.textureUploads / 120.0, state.textureBytes / (120.0 * 1024.0),
 			state.textureChanges / 120.0, state.matrixFlushes / 120.0, state.textureFlushes / 120.0, state.blendFlushes / 120.0,
 			state.depthFlushes / 120.0, state.alphaFlushes / 120.0, state.fogFlushes / 120.0,
 			state.gpuMeshDraws / 120.0, state.gpuMeshIndices / 120.0, state.gpuMeshUploadBytes / (120.0 * 1024.0), state.bonePaletteBytes / (120.0 * 1024.0),
 			state.cpuSkinningVertices / 120.0, state.cpuSkinningNormals / 120.0, state.gpuSkinningFallbacks / 120.0,
-			state.gpuSkinningMaterialFallbacks / 120.0, state.gpuSkinningGeometryFallbacks / 120.0, state.gpuSkinningResourceFallbacks / 120.0);
+			state.gpuSkinningMaterialFallbacks / 120.0, state.gpuSkinningGeometryFallbacks / 120.0, state.gpuSkinningResourceFallbacks / 120.0,
+			state.instancedDraws / 120.0, state.instancesSubmitted / 120.0, state.instanceBatches / 120.0,
+			state.largestInstanceBatch, state.instancePaletteDedupHits / 120.0,
+			state.meshCacheHits / 120.0, state.meshCacheMisses / 120.0,
+			state.meshVerticesResident / 120.0, state.meshIndicesResident / 120.0,
+			state.transformsExecuted / 120.0, state.transformsSkipped / 120.0,
+			state.animationsExecuted / 120.0, state.animationsSkipped / 120.0, state.uniformCallsSaved / 120.0,
+			state.phaseUs[RenderPhaseTerrain] / 120.0, state.phaseUs[RenderPhaseObjects] / 120.0,
+			state.phaseUs[RenderPhaseCharacters] / 120.0, state.phaseUs[RenderPhaseEffects] / 120.0,
+			state.phaseUs[RenderPhaseSprites] / 120.0, state.phaseUs[RenderPhaseSimulation] / 120.0,
+			state.phaseUs[RenderPhaseSelect] / 120.0, state.phaseUs[RenderPhaseSetup] / 120.0,
+			state.phaseUs[RenderPhaseMisc] / 120.0, medidoRestante / 120.0);
 		fclose(file);
 	}
 	state = CaptureState();
@@ -3061,10 +3205,17 @@ void RenderScene(HDC hDC)
         Platform::SetGpuSkinningMode(Platform::GpuSkinningOn);
         Platform::SetGpuSkinningDeployment(Platform::GpuSkinningQA);
     }
+    ParseRenderFeatureFlag(commandLine, "-instancing=", Platform::RenderFeatureInstancing);
+    ParseRenderFeatureFlag(commandLine, "-statictransformcache=", Platform::RenderFeatureStaticTransformCache);
+    ParseRenderFeatureFlag(commandLine, "-batching=", Platform::RenderFeatureBatching);
     Platform::BeginGpuSkinningFrame();
-	g_renderStatsStart = GetTickCount();
+	g_renderStatsStart = RenderStatsNowMicroseconds();
+	memset(g_renderPhaseUs, 0, sizeof(g_renderPhaseUs));
     CalcFPS();
-	UpdateSceneState();
+	{
+		ScopedRenderPhase phase(RenderPhaseSimulation);
+		UpdateSceneState();
+	}
 
 	last_render_tick_count = current_tick_count;
 
