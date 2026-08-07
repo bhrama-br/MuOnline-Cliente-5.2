@@ -10453,7 +10453,9 @@ void RenderPartObjectEdge(BMD *b,OBJECT *o,int Flag,bool Translate,float Scale)
 	BoneScale = Scale;
 	if(o->EnableBoneMatrix == 1)
 	{
-		b->Transform(o->BoneTransform,o->BoundingBoxMin,o->BoundingBoxMax,&o->OBB,Translate);
+		b->PrepareGpuRender(o->BoneTransform, Translate);
+		if (!b->CanRenderBodyWithGpu(Flag, o->Alpha, o->BlendMesh, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh))
+			b->Transform(o->BoneTransform,o->BoundingBoxMin,o->BoundingBoxMax,&o->OBB,Translate);
 	}
 	else
 	{
@@ -10508,7 +10510,9 @@ void RenderPartObjectEdge2(BMD *b, OBJECT* o, int Flag,bool Translate,float Scal
 	b->LightEnable = false;
 	
 	BoneScale = Scale;
-	b->Transform(BoneTransform,tmp,tmp,OBB, Translate);
+	b->PrepareGpuRender(BoneTransform, Translate);
+	if (!b->CanRenderBodyWithGpu(Flag, o->Alpha, o->BlendMesh, o->BlendMeshTexCoordU, o->BlendMeshTexCoordV, o->HiddenMesh))
+		b->Transform(BoneTransform,tmp,tmp,OBB, Translate);
 	b->RenderBody(Flag,o->Alpha,o->BlendMesh,o->BlendMeshLight,o->BlendMeshTexCoordU,o->BlendMeshTexCoordV,o->HiddenMesh);
 	
 	BoneScale = 1.f;

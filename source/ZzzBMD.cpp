@@ -65,6 +65,70 @@ static void DrawLegacyVertexArray(const vec3_t* vertices, const vec4_t* colors, 
     renderer.End();
 }
 
+// Cria uma unica vez a representacao indexada da bind pose. Este cache ainda
+// nao e usado por modelos animados: esses vao receber a paleta no shader na
+// Fase 2. O triangulo BMD pode ser quad, por isso ele e triangulado aqui,
+// preservando a mesma diagonal usada pela conversao do adaptador legado.
+static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
+{
+    if (mesh.GpuStaticVertices != NULL && mesh.GpuStaticIndices != NULL)
+        return true;
+    if (mesh.NumVertices <= 0 || mesh.NumTriangles <= 0 || mesh.Vertices == NULL ||
+        mesh.Normals == NULL || mesh.TexCoords == NULL || mesh.Triangles == NULL)
+        return false;
+
+    int indexCount = 0;
+    for (int triangleIndex = 0; triangleIndex < mesh.NumTriangles; ++triangleIndex)
+    {
+        const int polygon = mesh.Triangles[triangleIndex].Polygon;
+        if (polygon == 3) indexCount += 3;
+        else if (polygon == 4) indexCount += 6;
+    }
+    if (indexCount == 0) return false;
+
+    // Os atributos BMD pertencem aos cantos do poligono, nao somente a
+    // `Vertex_t`. Expandir uma vez no cache preserva costuras de UV/normais e
+    // ainda deixa o IBO residente na GPU.
+    Platform::StaticMeshVertex* vertices = new Platform::StaticMeshVertex[indexCount];
+    unsigned int* indices = new unsigned int[indexCount];
+    int outputIndex = 0;
+    for (int triangleIndex = 0; triangleIndex < mesh.NumTriangles; ++triangleIndex)
+    {
+        const Triangle_t& triangle = mesh.Triangles[triangleIndex];
+        const int polygon = triangle.Polygon;
+        if (polygon != 3 && polygon != 4) { delete[]vertices; delete[]indices; return false; }
+        for (int corner = 0; corner < polygon; ++corner)
+        {
+            const int vertexIndex = triangle.VertexIndex[corner];
+            const int normalIndex = triangle.NormalIndex[corner];
+            const int texCoordIndex = triangle.TexCoordIndex[corner];
+            if (vertexIndex < 0 || vertexIndex >= mesh.NumVertices || normalIndex < 0 || normalIndex >= mesh.NumNormals ||
+                texCoordIndex < 0 || texCoordIndex >= mesh.NumTexCoords || mesh.Vertices[vertexIndex].Node < 0 ||
+                mesh.Vertices[vertexIndex].Node >= boneCount || mesh.Normals[normalIndex].Node < 0 ||
+                mesh.Normals[normalIndex].Node >= boneCount) { delete[]vertices; delete[]indices; return false; }
+            Platform::StaticMeshVertex& output = vertices[outputIndex];
+            const Vertex_t& input = mesh.Vertices[vertexIndex];
+            const Normal_t& normal = mesh.Normals[normalIndex];
+            const TexCoord_t& texCoord = mesh.TexCoords[texCoordIndex];
+            VectorCopy(input.Position, output.position);
+            VectorCopy(normal.Normal, output.normal);
+            output.texCoord[0] = texCoord.TexCoordU;
+            output.texCoord[1] = texCoord.TexCoordV;
+            output.color[0] = output.color[1] = output.color[2] = output.color[3] = 1.f;
+            output.positionBone = static_cast<float>(input.Node);
+            output.normalBone = static_cast<float>(normal.Node);
+            output.waveSeed = static_cast<float>(vertexIndex);
+            indices[outputIndex] = outputIndex;
+            ++outputIndex;
+        }
+    }
+    mesh.GpuStaticVertices = vertices;
+    mesh.GpuStaticIndices = indices;
+    mesh.GpuStaticVertexCount = indexCount;
+    mesh.GpuStaticIndexCount = indexCount;
+    return true;
+}
+
 // Classificacao conservadora por corpo: apenas malhas comprovadamente opacas
 // entram na primeira fila. Alpha-test, scripts e efeitos permanecem na fila
 // transparente, que conserva a ordem original do BMD.
@@ -227,14 +291,83 @@ void BMD::Animation(float(*BoneMatrix)[3][4], float AnimationFrame, float PriorF
 
 extern int  SceneFlag;
 extern int EditFlag;
+extern int WaterTextureNumber;
 
 bool HighLight = true;
 float BoneScale = 1.f;
 
+void BMD::PrepareGpuRender(float(*BoneMatrix)[3][4], bool Translate, float _Scale)
+{
+    GpuBoneMatrices = BoneMatrix;
+    GpuBoneMatrixCount = NumBones;
+    GpuBodyScale = Translate ? BodyScale : 1.f;
+    if (Translate) { VectorCopy(BodyOrigin, GpuPostTranslation); }
+    else { Vector(0.f, 0.f, 0.f, GpuPostTranslation); }
+    GpuStaticMatrixValid = BoneMatrix != NULL && NumBones == 1 && BoneScale == 1.f && _Scale == 0.f;
+    if (GpuStaticMatrixValid) memcpy(GpuStaticMatrix, BoneMatrix[0], sizeof(GpuStaticMatrix));
+
+    vec3_t lightPosition; Vector(0.f, 0.f, 0.f, lightPosition);
+    if (LightEnable)
+    {
+        vec3_t position; float matrix[3][4];
+        if (HighLight) { Vector(1.3f, 0.f, 2.f, position); }
+        else if (gMapManager.InBattleCastle()) { Vector(0.5f, -1.f, 1.f, position); Vector(0.f, 0.f, -45.f, ShadowAngle); }
+        else { Vector(0.f, -1.5f, 0.f, position); }
+        AngleMatrix(ShadowAngle, matrix); VectorIRotate(position, matrix, lightPosition);
+    }
+    VectorCopy(lightPosition, GpuLightPosition);
+}
+
+bool BMD::CanRenderBodyWithGpu(int renderFlags, float alpha, int blendMesh, float blendU, float blendV, int hiddenMesh, int explicitTexture) const
+{
+    if (!Platform::IsGlslLegacyBackendEnabled() || !Platform::ShouldUseGpuSkinning() || alpha < 0.99f ||
+        blendU != 0.f || blendV != 0.f || GpuBoneMatrices == NULL || GpuBoneMatrixCount <= 0 || GpuBoneMatrixCount > 200) return false;
+    const int supported = RENDER_TEXTURE | RENDER_BRIGHT | RENDER_DARK | RENDER_NODEPTH | RENDER_WAVE |
+        RENDER_CHROME | RENDER_CHROME2 | RENDER_METAL | RENDER_OIL | RENDER_SHADOWMAP | RENDER_LIGHTMAP;
+    if ((renderFlags & ~supported) != 0) return false;
+    const bool materialEffect = (renderFlags & (RENDER_CHROME | RENDER_CHROME2 | RENDER_METAL | RENDER_OIL)) != 0;
+    const bool untexturedBright = (renderFlags & ~(RENDER_BRIGHT | RENDER_NODEPTH)) == RENDER_BRIGHT;
+    if ((renderFlags & RENDER_TEXTURE) == 0 && !materialEffect && !untexturedBright) return false;
+    for (int i = 0; i < NumMeshs; ++i)
+    {
+        if (i == hiddenMesh) continue;
+        const Mesh_t& mesh = Meshs[i];
+        if (mesh.NoneBlendMesh || (mesh.m_csTScript != NULL &&
+            (mesh.m_csTScript->getHiddenMesh() || mesh.m_csTScript->getStreamMesh() ||
+             mesh.m_csTScript->getNoneBlendMesh() || mesh.m_csTScript->getShadowMesh() != SHADOW_NONE))) return false;
+        if (blendMesh != -1 && blendMesh > -2 && mesh.Texture != blendMesh) return false;
+        int textureIndex = explicitTexture != -1 ? explicitTexture : IndexTexture[mesh.Texture];
+        if (textureIndex == BITMAP_HIDE) return false;
+        if (explicitTexture == -1 && textureIndex == BITMAP_SKIN)
+        {
+            if (HideSkin) return false;
+            textureIndex = BITMAP_SKIN + Skin;
+        }
+        else if (explicitTexture == -1 && textureIndex == BITMAP_WATER) textureIndex = BITMAP_WATER + WaterTextureNumber;
+        else if (explicitTexture == -1 && textureIndex == BITMAP_HAIR)
+        {
+            if (HideSkin) return false;
+            textureIndex = BITMAP_HAIR + (Skin - 8);
+        }
+        if (materialEffect)
+        {
+            if ((renderFlags & RENDER_CHROME) != 0) textureIndex = BITMAP_CHROME;
+            else if ((renderFlags & RENDER_CHROME2) != 0) textureIndex = BITMAP_CHROME2;
+            else if ((renderFlags & RENDER_METAL) != 0) textureIndex = BITMAP_SHINY;
+        }
+        const BITMAP_t* bitmap = Bitmaps.GetTexture(textureIndex);
+        if (bitmap == NULL || (bitmap->Components != 3 && bitmap->Components != 4)) return false;
+        if (untexturedBright && bitmap->Components == 4) return false;
+    }
+    return true;
+}
+
 void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t BoundingBoxMax, OBB_t* OBB, bool Translate, float _Scale)
 {
+    PrepareGpuRender(BoneMatrix, Translate, _Scale);
     // transform
     vec3_t LightPosition;
+    Vector(0.f, 0.f, 0.f, LightPosition);
 
     if (LightEnable)
     {
@@ -258,6 +391,7 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
         AngleMatrix(ShadowAngle, Matrix);
         VectorIRotate(Position, Matrix, LightPosition);
     }
+    VectorCopy(LightPosition, GpuLightPosition);
     vec3_t BoundingMin;
     vec3_t BoundingMax;
 #ifdef _DEBUG
@@ -271,6 +405,7 @@ void BMD::Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t Boun
     for (int i = 0; i < NumMeshs; i++)
     {
         Mesh_t* m = &Meshs[i];
+        Platform::RecordCpuSkinningWork(static_cast<unsigned long long>(m->NumVertices), static_cast<unsigned long long>(m->NumNormals));
         for (int j = 0; j < m->NumVertices; j++)
         {
             Vertex_t* v = &m->Vertices[j];
@@ -1058,6 +1193,88 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
 
     const auto texture = Bitmaps.GetTexture(textureIndex);
 
+    // Primeiro corte da Fase 1: geometria de bind pose persistente, apenas
+    // para BMD rigidamente ligado ao osso raiz e material opaco simples. Isto
+    // elimina a expansao de triangulos e o upload por frame sem alterar o
+    // skinning CPU de personagens; a paleta entrara na Fase 2.
+    int gpuMaterialEffect = 0;
+    int gpuTextureIndex = textureIndex;
+    if ((renderFlags & RENDER_CHROME) != 0) { gpuMaterialEffect = 1; gpuTextureIndex = BITMAP_CHROME; }
+    else if ((renderFlags & RENDER_CHROME2) != 0) { gpuMaterialEffect = 2; gpuTextureIndex = BITMAP_CHROME2; }
+    else if ((renderFlags & RENDER_METAL) != 0) { gpuMaterialEffect = 3; gpuTextureIndex = BITMAP_SHINY; }
+    else if ((renderFlags & RENDER_OIL) != 0) gpuMaterialEffect = 4;
+    const BITMAP_t* gpuTexture = gpuMaterialEffect != 0 ? Bitmaps.GetTexture(gpuTextureIndex) : texture;
+    // O contorno legado com somente RENDER_BRIGHT nao usa a textura: desenha
+    // a cor do corpo em blend aditivo. Trata-lo separadamente evita converter
+    // acidentalmente esse passe em uma mesh texturizada.
+    const bool gpuUntexturedBright = (renderFlags & ~(RENDER_BRIGHT | RENDER_NODEPTH)) == RENDER_BRIGHT &&
+        texture != NULL && texture->Components == 3;
+    const bool gpuScriptCompatible = m->m_csTScript == NULL ||
+        (!m->m_csTScript->getHiddenMesh() && !m->m_csTScript->getStreamMesh() &&
+         !m->m_csTScript->getNoneBlendMesh() &&
+         (m->m_csTScript->getShadowMesh() == SHADOW_NONE || (renderFlags & RENDER_SHADOWMAP) != 0));
+    const int gpuSupportedMaterialFlags = RENDER_TEXTURE | RENDER_BRIGHT | RENDER_DARK | RENDER_NODEPTH | RENDER_WAVE |
+        RENDER_CHROME | RENDER_CHROME2 | RENDER_METAL | RENDER_OIL | RENDER_SHADOWMAP | RENDER_LIGHTMAP;
+    // O bloco BmdBones do shader possui 600 vec4: tres linhas para cada um
+    // dos 200 ossos. Modelos acima disso mantem o caminho CPU ate haver
+    // divisao por paleta/submalha.
+    const bool gpuPaletteSupported = GpuBoneMatrixCount <= 200;
+    const bool staticGpuCandidate = Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinning()
+        && GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0 && gpuPaletteSupported
+        && ((renderFlags & RENDER_TEXTURE) != 0 || gpuMaterialEffect != 0 || gpuUntexturedBright)
+        && (renderFlags & ~gpuSupportedMaterialFlags) == 0 && alpha >= 0.99f
+        && (blendMeshIndex == -1 || blendMeshIndex <= -2 || m->Texture == blendMeshIndex)
+        && blendMeshTextureCoordU == 0.f && blendMeshTextureCoordV == 0.f
+        && gpuScriptCompatible && !m->NoneBlendMesh && gpuTexture != NULL
+        && (gpuTexture->Components == 3 || gpuTexture->Components == 4);
+    const bool gpuMeshPrepared = staticGpuCandidate && PrepareStaticGpuMesh(*m, GpuBoneMatrixCount);
+    if (gpuMeshPrepared)
+    {
+        Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+        if (renderer.UploadStaticMesh(m, m->GpuStaticVertices, m->GpuStaticVertexCount,
+            m->GpuStaticIndices, m->GpuStaticIndexCount))
+        {
+            BindTexture(gpuTextureIndex);
+            const bool gpuBlendMesh = blendMeshIndex <= -2 || m->Texture == blendMeshIndex;
+            if (gpuBlendMesh)
+            {
+                if ((renderFlags & RENDER_DARK) != 0) EnableAlphaBlendMinus();
+                else EnableAlphaBlend();
+            }
+            else if ((renderFlags & RENDER_BRIGHT) != 0)
+                EnableAlphaBlend();
+            else if ((renderFlags & RENDER_DARK) != 0)
+                EnableAlphaBlendMinus();
+            else if ((renderFlags & RENDER_LIGHTMAP) != 0)
+                EnableLightMap();
+            else if (gpuTexture->Components == 4)
+                EnableAlphaTest();
+            else
+                DisableAlphaBlend();
+            if (gpuUntexturedBright)
+                DisableDepthMask();
+            if ((renderFlags & RENDER_NODEPTH) != 0)
+                DisableDepthTest();
+            renderer.SetTexture2D(!gpuUntexturedBright);
+            if (!gpuUntexturedBright)
+                renderer.BindTexture(gpuTexture->TextureNumber);
+            const float blendLight = gpuBlendMesh ? blendMeshAlpha : 1.f;
+            const float color[4] = { BodyLight[0] * blendLight, BodyLight[1] * blendLight, BodyLight[2] * blendLight, alpha };
+            if (renderer.DrawStaticMesh(m, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
+                GpuBodyScale, gpuMaterialEffect == 0 && LightEnable && !gpuBlendMesh, GpuLightPosition, GpuPostTranslation,
+                (renderFlags & RENDER_WAVE) != 0, static_cast<float>(WorldTime), gpuMaterialEffect,
+                (renderFlags & RENDER_SHADOWMAP) != 0, BodyOrigin, BoneScale))
+                return;
+        }
+    }
+    if (Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinning() &&
+        GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0)
+    {
+        Platform::RecordGpuSkinningFallback(!gpuPaletteSupported || (staticGpuCandidate && !gpuMeshPrepared)
+            ? Platform::GpuSkinningFallbackGeometry
+            : (!staticGpuCandidate ? Platform::GpuSkinningFallbackMaterial : Platform::GpuSkinningFallbackResource));
+    }
+
     // Primeiro recorte da migracao para a fila global: somente a malha BMD
     // sem blend, alpha-test, animacao de UV ou script. Todo o resto descarrega
     // o trecho pendente antes de continuar pelo caminho legado.
@@ -1506,6 +1723,17 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
 void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFlag, float Alpha, int BlendMesh, float BlendMeshLight, float BlendMeshTexCoordU, float BlendMeshTexCoordV, int MeshTexture)
 {
     if (i >= NumMeshs || i < 0) return;
+
+    // Sem extensao alternativa, os parametros sao os mesmos do caminho
+    // principal. Reutilizar RenderMesh permite que a malha residente use GPU
+    // Skinning e conserva o fallback legado para materiais nao elegiveis.
+    if (iRndExtFlag == 0 || (iRndExtFlag & ~RNDEXT_WAVE) == 0)
+    {
+        const int effectiveRenderFlag = RenderFlag | ((iRndExtFlag & RNDEXT_WAVE) != 0 ? RENDER_WAVE : 0);
+        RenderMesh(i, effectiveRenderFlag, Alpha, BlendMesh, BlendMeshLight,
+            BlendMeshTexCoordU, BlendMeshTexCoordV, MeshTexture);
+        return;
+    }
 
     Mesh_t* m = &Meshs[i];
     if (m->NumTriangles == 0) return;
@@ -2864,6 +3092,13 @@ void BMD::Release()
             delete[]m->Normals;
             delete[]m->TexCoords;
             delete[]m->Triangles;
+            Platform::GetLegacyRenderAdapter().ReleaseStaticMesh(m);
+            delete[]m->GpuStaticVertices;
+            delete[]m->GpuStaticIndices;
+            m->GpuStaticVertices = NULL;
+            m->GpuStaticIndices = NULL;
+            m->GpuStaticVertexCount = 0;
+            m->GpuStaticIndexCount = 0;
 
             if (m->m_csTScript)
             {

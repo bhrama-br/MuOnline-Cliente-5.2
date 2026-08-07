@@ -2944,12 +2944,13 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		CaptureState() : scene(-1), world(-1), width(0), height(0), glslBackend(false), warmup(0), frames(0), cpuTotal(0),
 			draws(0), vertices(0), vboBytes(0), bufferData(0), bufferSubData(0), flushes(0), textureUploads(0),
 			textureBytes(0), textureChanges(0), matrixFlushes(0), textureFlushes(0), blendFlushes(0), depthFlushes(0),
-			alphaFlushes(0), fogFlushes(0) {}
+			alphaFlushes(0), fogFlushes(0), gpuMeshDraws(0), gpuMeshIndices(0), gpuMeshUploadBytes(0), bonePaletteBytes(0), cpuSkinningVertices(0), cpuSkinningNormals(0), gpuSkinningFallbacks(0), gpuSkinningMaterialFallbacks(0), gpuSkinningGeometryFallbacks(0), gpuSkinningResourceFallbacks(0) {}
 		int scene, world, width, height;
 		bool glslBackend;
 		unsigned int warmup, frames;
 		unsigned long long cpuTotal, draws, vertices, vboBytes, bufferData, bufferSubData, flushes, textureUploads,
-			textureBytes, textureChanges, matrixFlushes, textureFlushes, blendFlushes, depthFlushes, alphaFlushes, fogFlushes;
+			textureBytes, textureChanges, matrixFlushes, textureFlushes, blendFlushes, depthFlushes, alphaFlushes, fogFlushes,
+			gpuMeshDraws, gpuMeshIndices, gpuMeshUploadBytes, bonePaletteBytes, cpuSkinningVertices, cpuSkinningNormals, gpuSkinningFallbacks, gpuSkinningMaterialFallbacks, gpuSkinningGeometryFallbacks, gpuSkinningResourceFallbacks;
 		DWORD cpuSamples[120];
 	};
 	static CaptureState state;
@@ -2976,6 +2977,13 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 	state.textureUploads += stats.textureUploads; state.textureBytes += stats.textureUploadBytes; state.textureChanges += stats.textureChanges;
 	state.matrixFlushes += stats.matrixFlushes; state.textureFlushes += stats.textureFlushes; state.blendFlushes += stats.blendFlushes;
 	state.depthFlushes += stats.depthFlushes; state.alphaFlushes += stats.alphaFlushes; state.fogFlushes += stats.fogFlushes;
+	state.gpuMeshDraws += stats.staticMeshDrawCalls; state.gpuMeshIndices += stats.staticMeshIndices;
+	state.gpuMeshUploadBytes += stats.staticMeshUploadBytes; state.bonePaletteBytes += stats.bonePaletteUploadBytes;
+	state.cpuSkinningVertices += stats.cpuSkinningVertices; state.cpuSkinningNormals += stats.cpuSkinningNormals;
+	state.gpuSkinningFallbacks += stats.gpuSkinningFallbacks;
+	state.gpuSkinningMaterialFallbacks += stats.gpuSkinningMaterialFallbacks;
+	state.gpuSkinningGeometryFallbacks += stats.gpuSkinningGeometryFallbacks;
+	state.gpuSkinningResourceFallbacks += stats.gpuSkinningResourceFallbacks;
 	if (state.frames < 120)
 		return;
 
@@ -2987,18 +2995,23 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 
 	// A versao 2 evita misturar as linhas antigas, que nao possuíam a coluna
 	// de backend, com as capturas comparativas da Fase 8.
-	FILE* file = fopen("RenderPerformance_v2.csv", "a+");
+	FILE* file = fopen("RenderPerformance_v5.csv", "a+");
 	if (file != NULL)
 	{
 		fseek(file, 0, SEEK_END);
 		if (ftell(file) == 0)
-			fprintf(file, "scene,world,resolution,backend,frames,cpu_ms_avg,cpu_ms_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg\n");
-		fprintf(file, "%d,%d,%dx%d,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
-			scene, world, width, height, glslBackend ? "glsl" : "fixed", state.cpuTotal / 120.0, static_cast<unsigned long>(sortedCpu[113]),
+			fprintf(file, "scene,world,resolution,backend,gpu_skinning,frames,cpu_ms_avg,cpu_ms_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg\n");
+		const char* skinningMode = Platform::GetGpuSkinningMode() == Platform::GpuSkinningOff ? "off" :
+			(Platform::GetGpuSkinningMode() == Platform::GpuSkinningCompare ? "compare" : "on");
+		fprintf(file, "%d,%d,%dx%d,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode, state.cpuTotal / 120.0, static_cast<unsigned long>(sortedCpu[113]),
 			state.draws / 120.0, state.vertices / 120.0, state.vboBytes / (120.0 * 1024.0), state.bufferData / 120.0,
 			state.bufferSubData / 120.0, state.flushes / 120.0, state.textureUploads / 120.0, state.textureBytes / (120.0 * 1024.0),
 			state.textureChanges / 120.0, state.matrixFlushes / 120.0, state.textureFlushes / 120.0, state.blendFlushes / 120.0,
-			state.depthFlushes / 120.0, state.alphaFlushes / 120.0, state.fogFlushes / 120.0);
+			state.depthFlushes / 120.0, state.alphaFlushes / 120.0, state.fogFlushes / 120.0,
+			state.gpuMeshDraws / 120.0, state.gpuMeshIndices / 120.0, state.gpuMeshUploadBytes / (120.0 * 1024.0), state.bonePaletteBytes / (120.0 * 1024.0),
+			state.cpuSkinningVertices / 120.0, state.cpuSkinningNormals / 120.0, state.gpuSkinningFallbacks / 120.0,
+			state.gpuSkinningMaterialFallbacks / 120.0, state.gpuSkinningGeometryFallbacks / 120.0, state.gpuSkinningResourceFallbacks / 120.0);
 		fclose(file);
 	}
 	state = CaptureState();
@@ -3011,6 +3024,13 @@ void RenderScene(HDC hDC)
     // SwapBuffers, GetLegacyRenderFrameStats() contem exatamente o frame que
     // acabou de ser apresentado, pronto para o futuro overlay/CSV.
     Platform::ResetLegacyRenderFrameStats();
+    if (::strstr(::GetCommandLineA(), "-gpuskinning=off") != NULL)
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningOff);
+    else if (::strstr(::GetCommandLineA(), "-gpuskinning=compare") != NULL)
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningCompare);
+    else
+        Platform::SetGpuSkinningMode(Platform::GpuSkinningOn);
+    Platform::BeginGpuSkinningFrame();
 	g_renderStatsStart = GetTickCount();
     CalcFPS();
 	UpdateSceneState();

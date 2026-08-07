@@ -46,6 +46,8 @@ namespace
     Platform::ILegacyRenderAdapter* g_LegacyRenderAdapter = NULL;
     #endif
     bool g_GlslLegacyBackendEnabled = false;
+    Platform::GpuSkinningMode g_GpuSkinningMode = Platform::GpuSkinningOn;
+    unsigned long g_GpuSkinningFrame = 0;
 }
 
 namespace
@@ -91,6 +93,18 @@ void Platform::RecordLegacyTextureUpload(unsigned long long bytes)
         g_LegacyRenderAdapter->RecordTextureUpload(bytes);
 }
 
+void Platform::RecordCpuSkinningWork(unsigned long long vertices, unsigned long long normals)
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->RecordCpuSkinningWork(vertices, normals);
+}
+
+void Platform::RecordGpuSkinningFallback(Platform::GpuSkinningFallbackReason reason)
+{
+    if (g_LegacyRenderAdapter != NULL)
+        g_LegacyRenderAdapter->RecordGpuSkinningFallback(reason);
+}
+
 void Platform::InvalidateLegacyRenderStateCache()
 {
     if (g_LegacyRenderAdapter != NULL)
@@ -131,4 +145,13 @@ void Platform::EnableGlslLegacyBackend(bool enabled)
 bool Platform::IsGlslLegacyBackendEnabled()
 {
     return g_GlslLegacyBackendEnabled;
+}
+
+void Platform::SetGpuSkinningMode(GpuSkinningMode mode) { g_GpuSkinningMode = mode; }
+Platform::GpuSkinningMode Platform::GetGpuSkinningMode() { return g_GpuSkinningMode; }
+void Platform::BeginGpuSkinningFrame() { ++g_GpuSkinningFrame; }
+bool Platform::ShouldUseGpuSkinning()
+{
+    if (g_GpuSkinningMode == GpuSkinningOff) return false;
+    return g_GpuSkinningMode == GpuSkinningOn || (g_GpuSkinningFrame & 1UL) == 0;
 }

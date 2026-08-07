@@ -1,10 +1,13 @@
 #include "stdafx.h"
 #include "LegacyRenderAdapter.h"
 
+#include <map>
+
 #ifdef glAttachShader
 #undef glAttachShader
 #undef glActiveTexture
 #undef glBindBuffer
+#undef glBindBufferBase
 #undef glBindVertexArray
 #undef glBufferData
 #undef glBufferSubData
@@ -23,12 +26,14 @@
 #undef glGetProgramiv
 #undef glGetShaderiv
 #undef glGetUniformLocation
+#undef glGetUniformBlockIndex
 #undef glLinkProgram
 #undef glShaderSource
 #undef glUniformMatrix4fv
 #undef glUniform1i
 #undef glUniform1f
 #undef glUniform3f
+#undef glUniformBlockBinding
 #undef glUseProgram
 #undef glVertexAttribPointer
 #endif
@@ -48,6 +53,7 @@ namespace
         PFNGLATTACHSHADERPROC AttachShader;
         PFNGLACTIVETEXTUREPROC ActiveTexture;
         PFNGLBINDBUFFERPROC BindBuffer;
+        PFNGLBINDBUFFERBASEPROC BindBufferBase;
         PFNGLBINDVERTEXARRAYPROC BindVertexArray;
         PFNGLBUFFERDATAPROC BufferData;
         PFNGLBUFFERSUBDATAPROC BufferSubData;
@@ -66,12 +72,14 @@ namespace
         PFNGLGETPROGRAMIVPROC GetProgramiv;
         PFNGLGETSHADERIVPROC GetShaderiv;
         PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation;
+        PFNGLGETUNIFORMBLOCKINDEXPROC GetUniformBlockIndex;
         PFNGLLINKPROGRAMPROC LinkProgram;
         PFNGLSHADERSOURCEPROC ShaderSource;
         PFNGLUNIFORMMATRIX4FVPROC UniformMatrix4fv;
         PFNGLUNIFORM1IPROC Uniform1i;
         PFNGLUNIFORM1FPROC Uniform1f;
         PFNGLUNIFORM3FPROC Uniform3f;
+        PFNGLUNIFORMBLOCKBINDINGPROC UniformBlockBinding;
         PFNGLUSEPROGRAMPROC UseProgram;
         PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer;
         PFNGLGETSHADERINFOLOGPROC GetShaderInfoLog;
@@ -81,12 +89,12 @@ namespace
         const char* MissingName() const
         {
 #define CHECK_GL(name) if (name == NULL) return "gl" #name " nao resolvida";
-            CHECK_GL(AttachShader); CHECK_GL(ActiveTexture); CHECK_GL(BindBuffer); CHECK_GL(BindVertexArray); CHECK_GL(BufferData); CHECK_GL(BufferSubData);
+            CHECK_GL(AttachShader); CHECK_GL(ActiveTexture); CHECK_GL(BindBuffer); CHECK_GL(BindBufferBase); CHECK_GL(BindVertexArray); CHECK_GL(BufferData); CHECK_GL(BufferSubData);
             CHECK_GL(CompileShader); CHECK_GL(CreateProgram); CHECK_GL(CreateShader); CHECK_GL(DeleteBuffers);
             CHECK_GL(DeleteProgram); CHECK_GL(DeleteShader); CHECK_GL(DeleteVertexArrays); CHECK_GL(DrawArrays); CHECK_GL(DrawElements);
             CHECK_GL(EnableVertexAttribArray); CHECK_GL(GenBuffers); CHECK_GL(GenVertexArrays); CHECK_GL(GetProgramiv);
-            CHECK_GL(GetShaderiv); CHECK_GL(GetUniformLocation); CHECK_GL(LinkProgram); CHECK_GL(ShaderSource);
-            CHECK_GL(UniformMatrix4fv); CHECK_GL(Uniform1i); CHECK_GL(UseProgram); CHECK_GL(VertexAttribPointer);
+            CHECK_GL(GetShaderiv); CHECK_GL(GetUniformLocation); CHECK_GL(GetUniformBlockIndex); CHECK_GL(LinkProgram); CHECK_GL(ShaderSource);
+            CHECK_GL(UniformMatrix4fv); CHECK_GL(Uniform1i); CHECK_GL(UniformBlockBinding); CHECK_GL(UseProgram); CHECK_GL(VertexAttribPointer);
 #undef CHECK_GL
             return "todas as funcoes resolvidas";
         }
@@ -100,21 +108,21 @@ namespace
 #else
 #define LOAD_GL(name) name = reinterpret_cast<decltype(name)>(eglGetProcAddress("gl" #name));
 #endif
-            LOAD_GL(AttachShader); LOAD_GL(ActiveTexture); LOAD_GL(BindBuffer); LOAD_GL(BindVertexArray); LOAD_GL(BufferData); LOAD_GL(BufferSubData);
+            LOAD_GL(AttachShader); LOAD_GL(ActiveTexture); LOAD_GL(BindBuffer); LOAD_GL(BindBufferBase); LOAD_GL(BindVertexArray); LOAD_GL(BufferData); LOAD_GL(BufferSubData);
             LOAD_GL(CompileShader); LOAD_GL(CreateProgram); LOAD_GL(CreateShader); LOAD_GL(DeleteBuffers);
             LOAD_GL(DeleteProgram); LOAD_GL(DeleteShader); LOAD_GL(DeleteVertexArrays); LOAD_GL(DrawArrays); LOAD_GL(DrawElements);
             LOAD_GL(EnableVertexAttribArray); LOAD_GL(GenBuffers); LOAD_GL(GenVertexArrays); LOAD_GL(GetProgramiv);
-            LOAD_GL(GetShaderiv); LOAD_GL(GetUniformLocation); LOAD_GL(LinkProgram); LOAD_GL(ShaderSource);
+            LOAD_GL(GetShaderiv); LOAD_GL(GetUniformLocation); LOAD_GL(GetUniformBlockIndex); LOAD_GL(LinkProgram); LOAD_GL(ShaderSource);
             LOAD_GL(UniformMatrix4fv); LOAD_GL(UseProgram); LOAD_GL(VertexAttribPointer);
-            LOAD_GL(Uniform1i); LOAD_GL(Uniform1f); LOAD_GL(Uniform3f);
+            LOAD_GL(Uniform1i); LOAD_GL(Uniform1f); LOAD_GL(Uniform3f); LOAD_GL(UniformBlockBinding);
             LOAD_GL(GetShaderInfoLog); LOAD_GL(GetProgramInfoLog);
 #undef LOAD_GL
-            return AttachShader != NULL && ActiveTexture != NULL && BindBuffer != NULL && BindVertexArray != NULL && BufferData != NULL && BufferSubData != NULL &&
+            return AttachShader != NULL && ActiveTexture != NULL && BindBuffer != NULL && BindBufferBase != NULL && BindVertexArray != NULL && BufferData != NULL && BufferSubData != NULL &&
                 CompileShader != NULL && CreateProgram != NULL && CreateShader != NULL && DeleteBuffers != NULL &&
                 DeleteProgram != NULL && DeleteShader != NULL && DeleteVertexArrays != NULL && DrawArrays != NULL && DrawElements != NULL &&
                 EnableVertexAttribArray != NULL && GenBuffers != NULL && GenVertexArrays != NULL && GetProgramiv != NULL &&
-                GetShaderiv != NULL && GetUniformLocation != NULL && LinkProgram != NULL && ShaderSource != NULL &&
-                UniformMatrix4fv != NULL && Uniform1i != NULL && Uniform1f != NULL && Uniform3f != NULL && UseProgram != NULL && VertexAttribPointer != NULL;
+                GetShaderiv != NULL && GetUniformLocation != NULL && GetUniformBlockIndex != NULL && LinkProgram != NULL && ShaderSource != NULL &&
+                UniformMatrix4fv != NULL && Uniform1i != NULL && Uniform1f != NULL && Uniform3f != NULL && UniformBlockBinding != NULL && UseProgram != NULL && VertexAttribPointer != NULL;
         }
     };
 
@@ -122,6 +130,7 @@ namespace
 #define glAttachShader g_ModernGl.AttachShader
 #define glActiveTexture g_ModernGl.ActiveTexture
 #define glBindBuffer g_ModernGl.BindBuffer
+#define glBindBufferBase g_ModernGl.BindBufferBase
 #define glBindVertexArray g_ModernGl.BindVertexArray
 #define glBufferData g_ModernGl.BufferData
 #define glBufferSubData g_ModernGl.BufferSubData
@@ -140,12 +149,14 @@ namespace
 #define glGetProgramiv g_ModernGl.GetProgramiv
 #define glGetShaderiv g_ModernGl.GetShaderiv
 #define glGetUniformLocation g_ModernGl.GetUniformLocation
+#define glGetUniformBlockIndex g_ModernGl.GetUniformBlockIndex
 #define glLinkProgram g_ModernGl.LinkProgram
 #define glShaderSource g_ModernGl.ShaderSource
 #define glUniformMatrix4fv g_ModernGl.UniformMatrix4fv
 #define glUniform1i g_ModernGl.Uniform1i
 #define glUniform1f g_ModernGl.Uniform1f
 #define glUniform3f g_ModernGl.Uniform3f
+#define glUniformBlockBinding g_ModernGl.UniformBlockBinding
 #define glUseProgram g_ModernGl.UseProgram
 #define glVertexAttribPointer g_ModernGl.VertexAttribPointer
 
@@ -177,15 +188,50 @@ namespace
         "layout(location=1) in vec4 aColor;\n"
         "layout(location=2) in vec2 aTexCoord;\n"
         "layout(location=3) in vec3 aNormal;\n"
-        "uniform mat4 uProjection;\n"
+        "layout(location=4) in float aPositionBone;\n"
+        "layout(location=5) in float aNormalBone;\n"
+        "layout(location=6) in float aWaveSeed;\n"
+        "uniform mat4 uProjection; uniform mat4 uModel;\n"
+        "uniform vec3 uDrawColor;\n"
+        "uniform int uSkinning;\n"
+        "uniform int uLighting; uniform vec3 uLightPosition;\n"
+        "uniform float uBodyScale;\n"
+        "uniform vec3 uPostTranslation;\n"
+        "uniform int uWave; uniform float uWorldTime;\n"
+        "uniform int uMaterialEffect;\n"
+        "uniform int uShadowMap; uniform vec3 uBodyOrigin;\n"
+        "uniform float uBoneScale;\n"
+        "layout(std140) uniform BmdBones { vec4 uBoneRows[600]; };\n"
         "uniform mat4 uModelView;\n"
         "out vec4 vColor;\n"
         "out vec2 vTexCoord;\n"
         "out float vEyeDistance;\n"
         "void main() {\n"
-        "  vec4 eye = uModelView * vec4(aPosition, 1.0);\n"
+        "  vec4 localPosition; vec3 localNormal;\n"
+        "  if (uSkinning != 0) {\n"
+        "    int row = int(aPositionBone + 0.5) * 3;\n"
+        "    vec4 p = vec4(aPosition, 1.0);\n"
+        "    localPosition = vec4(dot(uBoneRows[row], p), dot(uBoneRows[row + 1], p), dot(uBoneRows[row + 2], p), 1.0);\n"
+        "    if (uBoneScale != 1.0) localPosition.xyz = vec3(dot(uBoneRows[row].xyz, aPosition) * uBoneScale + uBoneRows[row].w, dot(uBoneRows[row+1].xyz, aPosition) * uBoneScale + uBoneRows[row+1].w, dot(uBoneRows[row+2].xyz, aPosition) * uBoneScale + uBoneRows[row+2].w);\n"
+        "    int normalRow = int(aNormalBone + 0.5) * 3; vec4 n = vec4(aNormal, 0.0);\n"
+        "    localNormal = vec3(dot(uBoneRows[normalRow], n), dot(uBoneRows[normalRow + 1], n), dot(uBoneRows[normalRow + 2], n));\n"
+        "  } else { localPosition = uModel * vec4(aPosition, 1.0); localNormal = aNormal; }\n"
+        "  localPosition.xyz *= uBodyScale;\n"
+        "  localPosition.xyz += uPostTranslation;\n"
+        "  if (uWave != 0) localPosition.xyz += localNormal * (sin((floor(uWorldTime) + aWaveSeed * 931.0) * 0.007) * 28.0);\n"
+        "  if (uShadowMap != 0) { vec3 p = localPosition.xyz - uBodyOrigin; p.x += p.z * (p.x + 2000.0) / (p.z - 4000.0); p.z = 5.0; localPosition.xyz = p + uBodyOrigin; }\n"
+        "  vec4 eye = uModelView * localPosition;\n"
         "  gl_Position = uProjection * eye;\n"
-        "  vColor = aColor; vTexCoord = aTexCoord;\n"
+        "  float luminosity = (uLighting != 0) ? max(dot(localNormal, uLightPosition) * 0.8 + 0.4, 0.2) : 1.0;\n"
+        // glColor do pipeline fixo satura *depois* de combinar a cor do corpo
+        // com a iluminacao por normal. Fazer isso no shader preserva o resultado
+        // do cliente para BodyLight e luminosity acima de 1.0.
+        "  vColor = clamp(aColor * vec4(uDrawColor * luminosity, 1.0), 0.0, 1.0); vTexCoord = aTexCoord;\n"
+        "  float wave = floor(uWorldTime) * 0.0001;\n"
+        "  if (uMaterialEffect == 1) vTexCoord = vec2(localNormal.z * 0.5 + wave, localNormal.y * 0.5 + wave * 2.0);\n"
+        "  else if (uMaterialEffect == 2) { float w2 = mod(floor(uWorldTime), 5000.0) * 0.00024 - 0.4; vTexCoord = vec2((localNormal.z + localNormal.x) * 0.8 + w2 * 2.0, (localNormal.y + localNormal.x) + w2 * 3.0); }\n"
+        "  else if (uMaterialEffect == 3) vTexCoord = vec2(localNormal.z * 0.5 + 0.2, localNormal.y * 0.5 + 0.5);\n"
+        "  else if (uMaterialEffect == 4) vTexCoord = vec2(localNormal.x * aTexCoord.x, localNormal.y * aTexCoord.y);\n"
         // Distancia no espaco de visao, base do fog linear.
         "  vEyeDistance = length(eye.xyz);\n"
         "}\n";
@@ -222,7 +268,7 @@ namespace
     public:
         GlslLegacyRenderAdapter()
             : m_primitive(Platform::LegacyPrimitiveQuads), m_uiDrawList(), m_vertices(m_uiDrawList.vertices), m_program(0), m_vertexBuffer(0), m_vertexBufferCapacity(0), m_quadIndexBuffer(0), m_quadIndexCapacity(0), m_vertexArray(0),
-              m_projectionLocation(-1), m_modelViewLocation(-1), m_matricesSet(false),
+              m_projectionLocation(-1), m_modelViewLocation(-1), m_modelLocation(-1), m_drawColorLocation(-1), m_skinningLocation(-1), m_lightingLocation(-1), m_lightPositionLocation(-1), m_bodyScaleLocation(-1), m_postTranslationLocation(-1), m_waveLocation(-1), m_worldTimeLocation(-1), m_materialEffectLocation(-1), m_shadowMapLocation(-1), m_bodyOriginLocation(-1), m_boneScaleLocation(-1), m_boneBlockIndex(GL_INVALID_INDEX), m_boneBuffer(0), m_boneBufferIndex(0), m_matricesSet(false),
               m_alphaTestLocation(-1), m_alphaRefLocation(-1), m_alphaTestReference(0.25f),
               m_fogLocation(-1), m_fogColorLocation(-1), m_fogStartLocation(-1), m_fogEndLocation(-1),
               m_fogEnabled(false), m_fogStart(0.f), m_fogEnd(1.f),
@@ -230,8 +276,10 @@ namespace
         {
 			// Capacidade inicial para os lotes comuns de UI/mundo. clear() preserva
 			// essa memoria entre frames, evitando realocacoes no aquecimento.
-			m_uiDrawList.vertices.reserve(8192);
-			m_drawVertices.reserve(8192);
+            m_uiDrawList.vertices.reserve(8192);
+            m_drawVertices.reserve(8192);
+            m_boneRows.reserve(200 * 12);
+            m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
             SetIdentity(m_projection);
             SetIdentity(m_modelView);
             SetColor(1.f, 1.f, 1.f, 1.f);
@@ -270,9 +318,16 @@ namespace
 
         virtual ~GlslLegacyRenderAdapter()
         {
+            for (std::map<const void*, StaticMesh>::iterator it = m_staticMeshes.begin(); it != m_staticMeshes.end(); ++it)
+            {
+                if (it->second.vertexArray != 0) glDeleteVertexArrays(1, &it->second.vertexArray);
+                if (it->second.vertexBuffer != 0) glDeleteBuffers(1, &it->second.vertexBuffer);
+                if (it->second.indexBuffer != 0) glDeleteBuffers(1, &it->second.indexBuffer);
+            }
             if (m_vertexArray != 0) glDeleteVertexArrays(1, &m_vertexArray);
             if (m_vertexBuffer != 0) glDeleteBuffers(1, &m_vertexBuffer);
             if (m_quadIndexBuffer != 0) glDeleteBuffers(1, &m_quadIndexBuffer);
+            glDeleteBuffers(3, m_boneBuffers);
             if (m_program != 0) glDeleteProgram(m_program);
         }
 
@@ -435,6 +490,15 @@ namespace
                 m_texturaEnviada = m_texture;
                 m_texturaEnviadaConhecida = true;
             }
+            const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
+            glUniformMatrix4fv(m_modelLocation, 1, GL_FALSE, identity);
+            glUniform3f(m_drawColorLocation, 1.f, 1.f, 1.f);
+            glUniform1i(m_skinningLocation, 0);
+            glUniform1i(m_lightingLocation, 0);
+            glUniform1f(m_bodyScaleLocation, 1.f);
+            glUniform3f(m_postTranslationLocation, 0.f, 0.f, 0.f);
+            glUniform1i(m_waveLocation, 0);
+            glUniform1i(m_materialEffectLocation, 0);
 
             if (!m_vaoAtivo)
             {
@@ -560,6 +624,18 @@ namespace
             ++m_frameStats.textureUploads;
             m_frameStats.textureUploadBytes += bytes;
         }
+        virtual void RecordCpuSkinningWork(unsigned long long vertices, unsigned long long normals)
+        {
+            m_frameStats.cpuSkinningVertices += vertices;
+            m_frameStats.cpuSkinningNormals += normals;
+        }
+        virtual void RecordGpuSkinningFallback(Platform::GpuSkinningFallbackReason reason)
+        {
+            ++m_frameStats.gpuSkinningFallbacks;
+            if (reason == Platform::GpuSkinningFallbackMaterial) ++m_frameStats.gpuSkinningMaterialFallbacks;
+            else if (reason == Platform::GpuSkinningFallbackGeometry) ++m_frameStats.gpuSkinningGeometryFallbacks;
+            else ++m_frameStats.gpuSkinningResourceFallbacks;
+        }
         virtual void InvalidateStateCache()
         {
             FlushPendingBatch();
@@ -571,14 +647,32 @@ namespace
         // EnsureResources reconstrua tudo no contexto novo.
         virtual void InvalidateGraphicsResources()
         {
+            m_staticMeshes.clear();
             m_program = 0;
             m_vertexBuffer = 0;
             m_vertexBufferCapacity = 0;
             m_quadIndexBuffer = 0;
             m_quadIndexCapacity = 0;
             m_vertexArray = 0;
+            m_boneBuffer = 0;
+            m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
+            m_boneBufferIndex = 0;
             m_projectionLocation = -1;
             m_modelViewLocation = -1;
+            m_modelLocation = -1;
+            m_drawColorLocation = -1;
+            m_skinningLocation = -1;
+            m_lightingLocation = -1;
+            m_lightPositionLocation = -1;
+            m_bodyScaleLocation = -1;
+            m_postTranslationLocation = -1;
+            m_waveLocation = -1;
+            m_worldTimeLocation = -1;
+            m_materialEffectLocation = -1;
+            m_shadowMapLocation = -1;
+            m_bodyOriginLocation = -1;
+            m_boneScaleLocation = -1;
+            m_boneBlockIndex = GL_INVALID_INDEX;
             m_textureLocation = -1;
             m_useTextureLocation = -1;
             m_depthTestEnabled = false;
@@ -587,10 +681,143 @@ namespace
             m_logged = false;
             m_batching = false;
             m_vertices.clear();
+            m_boneRows.clear();
             // Sem isto o cache afirmaria que uniformes e matrizes ja estao no GL, e o
             // contexto novo comecaria com estado indefinido.
             InvalidarCacheDeEstado();
             Platform::LegacyRenderLog("GlslLegacyRenderAdapter: recursos invalidados apos recriacao de contexto");
+        }
+
+        virtual bool UploadStaticMesh(const void* key, const Platform::StaticMeshVertex* vertices, size_t vertexCount,
+            const unsigned int* indices, size_t indexCount)
+        {
+            if (key == NULL || vertices == NULL || indices == NULL || vertexCount == 0 || indexCount == 0 || !EnsureResources())
+                return false;
+            if (m_staticMeshes.find(key) != m_staticMeshes.end())
+                return true;
+
+            StaticMesh mesh;
+            mesh.vertexCount = vertexCount;
+            mesh.indexCount = indexCount;
+            glGenVertexArrays(1, &mesh.vertexArray);
+            glGenBuffers(1, &mesh.vertexBuffer);
+            glGenBuffers(1, &mesh.indexBuffer);
+            glBindVertexArray(mesh.vertexArray);
+            glBindBuffer(GL_ARRAY_BUFFER, mesh.vertexBuffer);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertexCount * sizeof(Platform::StaticMeshVertex)), vertices, GL_STATIC_DRAW);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indexCount * sizeof(unsigned int)), indices, GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, position));
+            glEnableVertexAttribArray(1); glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, color));
+            glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, texCoord));
+            glEnableVertexAttribArray(3); glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, normal));
+            glEnableVertexAttribArray(4); glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, positionBone));
+            glEnableVertexAttribArray(5); glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, normalBone));
+            glEnableVertexAttribArray(6); glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, waveSeed));
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            m_staticMeshes[key] = mesh;
+            ++m_frameStats.bufferDataCalls;
+            ++m_frameStats.bufferDataCalls;
+            m_frameStats.staticMeshUploadBytes += static_cast<unsigned long long>(vertexCount * sizeof(Platform::StaticMeshVertex)) +
+                static_cast<unsigned long long>(indexCount * sizeof(unsigned int));
+            return true;
+        }
+
+        virtual bool DrawStaticMesh(const void* key, const float* color, const float* modelMatrix,
+            const float* boneMatrices = NULL, size_t boneCount = 0, float bodyScale = 1.f,
+            bool lighting = false, const float* lightPosition = NULL, const float* postTranslation = NULL,
+            bool wave = false, float worldTime = 0.f, int materialEffect = 0, bool shadowMap = false, const float* bodyOrigin = NULL, float boneScale = 1.f)
+        {
+            std::map<const void*, StaticMesh>::const_iterator found = m_staticMeshes.find(key);
+            if (found == m_staticMeshes.end() || color == NULL || modelMatrix == NULL || !EnsureResources())
+                return false;
+            FlushPendingBatch();
+            const StaticMesh& mesh = found->second;
+            glUseProgram(m_program);
+            glUniform1i(m_textureLocation, 0);
+            glUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0);
+            glUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0);
+            glUniform1f(m_alphaRefLocation, m_alphaTestReference);
+            glUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0);
+            glUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2]);
+            glUniform1f(m_fogStartLocation, m_fogStart);
+            glUniform1f(m_fogEndLocation, m_fogEnd);
+            glUniformMatrix4fv(m_projectionLocation, 1, GL_FALSE, m_projection);
+            glUniformMatrix4fv(m_modelViewLocation, 1, GL_FALSE, m_modelView);
+            const float model[16] = {
+                modelMatrix[0], modelMatrix[4], modelMatrix[8], 0.f,
+                modelMatrix[1], modelMatrix[5], modelMatrix[9], 0.f,
+                modelMatrix[2], modelMatrix[6], modelMatrix[10], 0.f,
+                modelMatrix[3], modelMatrix[7], modelMatrix[11], 1.f };
+            glUniformMatrix4fv(m_modelLocation, 1, GL_FALSE, model);
+            // Nao limite a cor antes da iluminacao no vertex shader. No caminho
+            // legado, a saturacao acontece apos BodyLight * IntensityTransform.
+            glUniform3f(m_drawColorLocation, color[0], color[1], color[2]);
+            const bool skinning = boneMatrices != NULL && boneCount > 0 && boneCount <= 200 && m_boneBlockIndex != GL_INVALID_INDEX;
+            glUniform1i(m_skinningLocation, skinning ? 1 : 0);
+            glUniform1i(m_lightingLocation, lighting ? 1 : 0);
+            glUniform1f(m_bodyScaleLocation, bodyScale);
+            if (postTranslation != NULL)
+                glUniform3f(m_postTranslationLocation, postTranslation[0], postTranslation[1], postTranslation[2]);
+            glUniform1i(m_waveLocation, wave ? 1 : 0);
+            glUniform1f(m_worldTimeLocation, worldTime);
+            glUniform1i(m_materialEffectLocation, materialEffect);
+            glUniform1i(m_shadowMapLocation, shadowMap ? 1 : 0);
+            if (shadowMap && bodyOrigin != NULL)
+                glUniform3f(m_bodyOriginLocation, bodyOrigin[0], bodyOrigin[1], bodyOrigin[2]);
+            glUniform1f(m_boneScaleLocation, boneScale);
+            if (lighting && lightPosition != NULL)
+                glUniform3f(m_lightPositionLocation, lightPosition[0], lightPosition[1], lightPosition[2]);
+            if (skinning)
+            {
+                std::vector<float>& rows = m_boneRows;
+                const size_t rowCount = boneCount * 12;
+                const size_t byteCount = rowCount * sizeof(float);
+                // Diversas meshes do mesmo BMD compartilham a mesma pose. So
+                // reenviamos a UBO se as matrizes realmente mudaram; comparar
+                // o conteudo, e nao o ponteiro, tambem cobre BoneTransform
+                // global reutilizado por instancias consecutivas.
+                const bool paletteChanged = rows.size() != rowCount || rows.empty() ||
+                    memcmp(&rows[0], boneMatrices, byteCount) != 0;
+                if (paletteChanged)
+                {
+                    rows.resize(rowCount);
+                    memcpy(&rows[0], boneMatrices, byteCount);
+                    m_boneBuffer = m_boneBuffers[m_boneBufferIndex];
+                    m_boneBufferIndex = (m_boneBufferIndex + 1) % 3;
+                    glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
+                    // Orphaning explicito evita esperar uma leitura da paleta
+                    // pelo GPU antes de gravar a pose seguinte.
+                    glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(byteCount), NULL, GL_STREAM_DRAW);
+                    glBufferSubData(GL_UNIFORM_BUFFER, 0, static_cast<GLsizeiptr>(byteCount), &rows[0]);
+                    ++m_frameStats.bufferDataCalls;
+                    ++m_frameStats.bufferSubDataCalls;
+                    m_frameStats.bonePaletteUploadBytes += static_cast<unsigned long long>(byteCount);
+                }
+                glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
+                glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_boneBuffer);
+            }
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_texture);
+            glBindVertexArray(mesh.vertexArray);
+            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.indexCount), GL_UNSIGNED_INT, NULL);
+            ++m_frameStats.drawCalls;
+            ++m_frameStats.staticMeshDrawCalls;
+            m_frameStats.vertices += mesh.indexCount;
+            m_frameStats.staticMeshIndices += mesh.indexCount;
+            InvalidarCacheDeEstado();
+            return true;
+        }
+
+        virtual void ReleaseStaticMesh(const void* key)
+        {
+            std::map<const void*, StaticMesh>::iterator found = m_staticMeshes.find(key);
+            if (found == m_staticMeshes.end()) return;
+            if (found->second.vertexArray != 0) glDeleteVertexArrays(1, &found->second.vertexArray);
+            if (found->second.vertexBuffer != 0) glDeleteBuffers(1, &found->second.vertexBuffer);
+            if (found->second.indexBuffer != 0) glDeleteBuffers(1, &found->second.indexBuffer);
+            m_staticMeshes.erase(found);
         }
 
     private:
@@ -657,6 +884,15 @@ namespace
             m_current.color[0] = Saturar(red);   m_current.color[1] = Saturar(green);
             m_current.color[2] = Saturar(blue);  m_current.color[3] = Saturar(alpha);
         }
+        struct StaticMesh
+        {
+            StaticMesh() : vertexArray(0), vertexBuffer(0), indexBuffer(0), vertexCount(0), indexCount(0) {}
+            GLuint vertexArray;
+            GLuint vertexBuffer;
+            GLuint indexBuffer;
+            size_t vertexCount;
+            size_t indexCount;
+        };
         void EnsureVertexBufferCapacity(GLsizeiptr requiredBytes)
         {
             if (requiredBytes <= m_vertexBufferCapacity)
@@ -786,6 +1022,22 @@ namespace
             Platform::LegacyRenderLog("GlslLegacyRenderAdapter: programa GLSL pronto");
             m_projectionLocation = glGetUniformLocation(m_program, "uProjection");
             m_modelViewLocation = glGetUniformLocation(m_program, "uModelView");
+            m_modelLocation = glGetUniformLocation(m_program, "uModel");
+            m_drawColorLocation = glGetUniformLocation(m_program, "uDrawColor");
+            m_skinningLocation = glGetUniformLocation(m_program, "uSkinning");
+            m_lightingLocation = glGetUniformLocation(m_program, "uLighting");
+            m_lightPositionLocation = glGetUniformLocation(m_program, "uLightPosition");
+            m_bodyScaleLocation = glGetUniformLocation(m_program, "uBodyScale");
+            m_postTranslationLocation = glGetUniformLocation(m_program, "uPostTranslation");
+            m_waveLocation = glGetUniformLocation(m_program, "uWave");
+            m_worldTimeLocation = glGetUniformLocation(m_program, "uWorldTime");
+            m_materialEffectLocation = glGetUniformLocation(m_program, "uMaterialEffect");
+            m_shadowMapLocation = glGetUniformLocation(m_program, "uShadowMap");
+            m_bodyOriginLocation = glGetUniformLocation(m_program, "uBodyOrigin");
+            m_boneScaleLocation = glGetUniformLocation(m_program, "uBoneScale");
+            m_boneBlockIndex = glGetUniformBlockIndex(m_program, "BmdBones");
+            if (m_boneBlockIndex != GL_INVALID_INDEX)
+                glUniformBlockBinding(m_program, m_boneBlockIndex, 0);
             m_textureLocation = glGetUniformLocation(m_program, "uTexture");
             m_useTextureLocation = glGetUniformLocation(m_program, "uUseTexture");
             m_alphaTestLocation = glGetUniformLocation(m_program, "uAlphaTest");
@@ -797,6 +1049,9 @@ namespace
             glGenVertexArrays(1, &m_vertexArray);
             glGenBuffers(1, &m_vertexBuffer);
             glGenBuffers(1, &m_quadIndexBuffer);
+            glGenBuffers(3, m_boneBuffers);
+            m_boneBuffer = m_boneBuffers[0];
+            m_boneBufferIndex = 1;
             glBindVertexArray(m_vertexArray);
             glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_quadIndexBuffer);
@@ -815,6 +1070,7 @@ namespace
         // adaptador agnostico da representacao da UiDrawList.
         std::vector<LegacyVertex>& m_vertices;
         std::vector<LegacyVertex> m_drawVertices;
+        std::vector<float> m_boneRows;
         LegacyVertex m_current;
         GLuint m_program;
         GLuint m_vertexBuffer;
@@ -824,6 +1080,23 @@ namespace
         GLuint m_vertexArray;
         GLint m_projectionLocation;
         GLint m_modelViewLocation;
+        GLint m_modelLocation;
+        GLint m_drawColorLocation;
+        GLint m_skinningLocation;
+        GLint m_lightingLocation;
+        GLint m_lightPositionLocation;
+        GLint m_bodyScaleLocation;
+        GLint m_postTranslationLocation;
+        GLint m_waveLocation;
+        GLint m_worldTimeLocation;
+        GLint m_materialEffectLocation;
+        GLint m_shadowMapLocation;
+        GLint m_bodyOriginLocation;
+        GLint m_boneScaleLocation;
+        GLuint m_boneBlockIndex;
+        GLuint m_boneBuffer;
+        GLuint m_boneBuffers[3];
+        unsigned int m_boneBufferIndex;
         GLint m_textureLocation;
         GLint m_useTextureLocation;
         GLint m_alphaTestLocation;
@@ -868,6 +1141,7 @@ namespace
         GLuint m_texturaEnviada;
         int m_blendModeEnviado;
         Platform::LegacyRenderFrameStats m_frameStats;
+        std::map<const void*, StaticMesh> m_staticMeshes;
     };
 }
 

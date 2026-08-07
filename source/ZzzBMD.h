@@ -2,6 +2,7 @@
 #define __ZZZBMD_H__
 
 #include "TextureScript.h"
+#include "Platform/LegacyRenderAdapter.h"
 
 #define MAX_BONES    200
 #define MAX_MESH     50
@@ -148,6 +149,12 @@ typedef struct _Mesh_t
     unsigned char* Commands; //ver1.1
 
     TextureScript* m_csTScript;
+    // Cache de geometria indexada para a Fase 1 de GPU skinning. Sao dados da
+    // bind pose; a paleta de ossos sera introduzida numa fase posterior.
+    Platform::StaticMeshVertex* GpuStaticVertices;
+    unsigned int* GpuStaticIndices;
+    int GpuStaticVertexCount;
+    int GpuStaticIndexCount;
 
     _Mesh_t()
     {
@@ -156,6 +163,10 @@ typedef struct _Mesh_t
         Triangles = NULL;
         Commands = NULL;
         m_csTScript = NULL;
+        GpuStaticVertices = NULL;
+        GpuStaticIndices = NULL;
+        GpuStaticVertexCount = 0;
+        GpuStaticIndexCount = 0;
 
         NumVertices = NumNormals = NumTexCoords =
             NumVertexColors = NumTriangles = 0;
@@ -209,6 +220,13 @@ public:
     char				iBillType;
 
     bool				m_bCompletedAlloc;
+    float               GpuStaticMatrix[3][4];
+    bool                GpuStaticMatrixValid;
+    const float         (*GpuBoneMatrices)[3][4];
+    int                 GpuBoneMatrixCount;
+    float               GpuBodyScale;
+    vec3_t              GpuLightPosition;
+    vec3_t              GpuPostTranslation;
 
     BMD() : NumBones(0), NumActions(0), NumMeshs(0),
         Meshs(NULL), Bones(NULL), Actions(NULL), Textures(NULL), IndexTexture(NULL)
@@ -220,6 +238,14 @@ public:
         iBillType = -1;
         bOffLight = false;
         m_bCompletedAlloc = false;
+        memset(GpuStaticMatrix, 0, sizeof(GpuStaticMatrix));
+        GpuStaticMatrix[0][0] = GpuStaticMatrix[1][1] = GpuStaticMatrix[2][2] = 1.f;
+        GpuStaticMatrixValid = false;
+        GpuBoneMatrices = NULL;
+        GpuBoneMatrixCount = 0;
+        GpuBodyScale = 1.f;
+        Vector(0.f, 0.f, 0.f, GpuLightPosition);
+        Vector(0.f, 0.f, 0.f, GpuPostTranslation);
     }
 
     ~BMD();
@@ -237,6 +263,9 @@ public:
     void Animation(float(*BoneTransform)[3][4], float AnimationFrame, float PriorAnimationFrame, unsigned short PriorAction, vec3_t Angle, vec3_t HeadAngle, bool Parent = false, bool Translate = true);
     void InterpolationTrans(float(*Mat1)[4], float(*TransMat2)[4], float _Scale);
     void Transform(float(*BoneMatrix)[3][4], vec3_t BoundingBoxMin, vec3_t BoundingBoxMax, OBB_t* OBB, bool Translate = false, float _Scale = 0.0f);
+    // Prepara somente dados para o shader; nao atualiza geometria CPU/OBB.
+    void PrepareGpuRender(float(*BoneMatrix)[3][4], bool Translate = false, float _Scale = 0.0f);
+    bool CanRenderBodyWithGpu(int renderFlags, float alpha, int blendMesh, float blendU, float blendV, int hiddenMesh = -1, int texture = -1) const;
     void TransformByObjectBone(vec3_t vResultPosition, OBJECT* pObject, int iBoneNumber, vec3_t vRelativePosition = NULL);
     // (vResultPosition = (pObject->BoneTransform[iBoneNumber] * vRelativePosition) + pObject->Position)
     void TransformByBoneMatrix(vec3_t vResultPosition, float(*BoneMatrix)[4], vec3_t vWorldPosition = NULL, vec3_t vRelativePosition = NULL);
