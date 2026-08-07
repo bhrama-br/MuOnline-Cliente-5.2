@@ -71,7 +71,7 @@ var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIR
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\paulo\AppData\Local\Temp\tmpy1lrp2nh.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmpk9sd4u5u.js
 
   if (!Module['expectedDataFileDownloads']) Module['expectedDataFileDownloads'] = 0;
   Module['expectedDataFileDownloads']++;
@@ -226,21 +226,21 @@ Module['FS_createPath']("/Data", "World10", true, true);
 
   })();
 
-// end include: C:\Users\paulo\AppData\Local\Temp\tmpy1lrp2nh.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmp1hr4gkgp.js
+// end include: C:\Users\paulo\AppData\Local\Temp\tmpk9sd4u5u.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmp8845nwvg.js
 
     // All the pre-js content up to here must remain later on, we need to run
     // it.
     if ((typeof ENVIRONMENT_IS_WASM_WORKER != 'undefined' && ENVIRONMENT_IS_WASM_WORKER) || (typeof ENVIRONMENT_IS_PTHREAD != 'undefined' && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != 'undefined' && ENVIRONMENT_IS_AUDIO_WORKLET)) Module['preRun'] = [];
     var necessaryPreJSTasks = Module['preRun'].slice();
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmp1hr4gkgp.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmpp5vngia0.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmp8845nwvg.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmphg1tpqgk.js
 
     if (!Module['preRun']) throw 'Module.preRun should exist because file support used it; did a pre-js delete it?';
     necessaryPreJSTasks.forEach((task) => {
       if (Module['preRun'].indexOf(task) < 0) throw 'All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?';
     });
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmpp5vngia0.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmphg1tpqgk.js
 
 
 var programArgs = [];
@@ -6896,6 +6896,11 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
     };
   var _glBindBuffer = _emscripten_glBindBuffer;
 
+  var _emscripten_glBindBufferBase = (target, index, buffer) => {
+      GLctx.bindBufferBase(target, index, GL.buffers[buffer]);
+    };
+  var _glBindBufferBase = _emscripten_glBindBufferBase;
+
   var _emscripten_glBindTexture = (target, texture) => {
       GLctx.bindTexture(target, GL.textures[texture]);
     };
@@ -7073,9 +7078,6 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       GLctx.enableVertexAttribArray(index);
     };
   var _glEnableVertexAttribArray = _emscripten_glEnableVertexAttribArray;
-
-  var _emscripten_glFlush = () => GLctx.flush();
-  var _glFlush = _emscripten_glFlush;
 
   var _emscripten_glGenBuffers = (n, buffers) => {
       GL.genObject(n, buffers, 'createBuffer', GL.buffers
@@ -7415,6 +7417,11 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
     };
   var _glGetString = _emscripten_glGetString;
 
+  var _emscripten_glGetUniformBlockIndex = (program, uniformBlockName) => {
+      return GLctx.getUniformBlockIndex(GL.programs[program], UTF8ToString(uniformBlockName));
+    };
+  var _glGetUniformBlockIndex = _emscripten_glGetUniformBlockIndex;
+
   /** @suppress {checkTypes} */
   var jstoi_q = (str) => parseInt(str);
   
@@ -7644,6 +7651,26 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   var _glTexParameteri = _emscripten_glTexParameteri;
 
   
+  
+  
+  var _emscripten_glTexSubImage2D = (target, level, xoffset, yoffset, width, height, format, type, pixels) => {
+      if (true) {
+        if (GLctx.currentPixelUnpackBufferBinding) {
+          GLctx.texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+          return;
+        }
+        if (pixels) {
+          var heap = heapObjectForWebGLType(type);
+          GLctx.texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, heap, toTypedArrayIndex(pixels, heap));
+          return;
+        }
+      }
+      var pixelData = pixels ? emscriptenWebGLGetTexPixelData(type, format, width, height, pixels) : null;
+      GLctx.texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixelData);
+    };
+  var _glTexSubImage2D = _emscripten_glTexSubImage2D;
+
+  
   var webglGetProgramUniformLocation = (program, location) => {
   
       if (program) {
@@ -7683,6 +7710,13 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       GLctx.uniform3f(webglGetUniformLocation(location), v0, v1, v2);
     };
   var _glUniform3f = _emscripten_glUniform3f;
+
+  var _emscripten_glUniformBlockBinding = (program, uniformBlockIndex, uniformBlockBinding) => {
+      program = GL.programs[program];
+  
+      GLctx.uniformBlockBinding(program, uniformBlockIndex, uniformBlockBinding);
+    };
+  var _glUniformBlockBinding = _emscripten_glUniformBlockBinding;
 
   
   var _emscripten_glUniformMatrix4fv = (location, count, transpose, value) => {
@@ -8225,19 +8259,19 @@ function checkIncomingModuleAPI() {
   ignoredModuleProp('wasmBinary');
 }
 var ASM_CONSTS = {
-  206128: ($0) => { var box = document.getElementById('mu_diag'); if (!box) { box = document.createElement('pre'); box.id = 'mu_diag'; box.style.cssText = 'position:fixed;left:0;top:0;right:0;max-height:50%;' + 'overflow:auto;margin:0;padding:8px;z-index:9999;' + 'background:rgba(120,0,0,.9);color:#fff;font:12px monospace;' + 'white-space:pre-wrap'; document.body.appendChild(box); } box.textContent += UTF8ToString($0) + "\n"; },  
- 206542: () => { if (Module.muAudio && Module.muAudio.context) { try { Module.muAudio.context.close(); } catch (e) {} Module.muAudio = null; } },  
- 206672: ($0, $1, $2, $3, $4) => { var audio = Module.muAudio; if (!audio) return 0; var slot = $0; var ptr = $1; var frames = $2; var channels = $3; var rate = $4; var buffer = audio.context.createBuffer(channels, frames, rate); for (var c = 0; c < channels; ++c) { var out = buffer.getChannelData(c); for (var i = 0; i < frames; ++i) { var sample = HEAP16[(ptr >> 1) + i * channels + c]; out[i] = sample / 32768.0; } } audio.buffers[slot] = buffer; if (!audio.gains[slot]) { var gain = audio.context.createGain(); gain.connect(audio.context.destination); audio.gains[slot] = gain; } audio.active[slot] = []; return 1; },  
- 207261: ($0) => { var audio = Module.muAudio; if (!audio) return; delete audio.buffers[$0]; if (audio.gains[$0]) { audio.gains[$0].disconnect(); delete audio.gains[$0]; } delete audio.active[$0]; },  
- 207443: ($0, $1) => { var audio = Module.muAudio; if (!audio || !audio.buffers[$0]) return 0; if (audio.context.state === 'suspended') audio.context.resume(); var source = audio.context.createBufferSource(); source.buffer = audio.buffers[$0]; source.loop = ($1 != 0); source.connect(audio.gains[$0]); var list = audio.active[$0] || (audio.active[$0] = []); source.onended = function() { var index = list.indexOf(source); if (index >= 0) list.splice(index, 1); }; list.push(source); source.start(0); return 1; },  
- 207934: ($0) => { var audio = Module.muAudio; if (!audio || !audio.active[$0]) return; var list = audio.active[$0]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[$0] = []; },  
- 208139: () => { var audio = Module.muAudio; if (!audio) return; for (var slot in audio.active) { var list = audio.active[slot]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[slot] = []; } },  
- 208362: ($0, $1) => { var audio = Module.muAudio; if (audio && audio.gains[$0]) audio.gains[$0].gain.value = $1; },  
- 208457: () => { try { if (!Module.muAudio) { var Context = window.AudioContext || window.webkitAudioContext; if (!Context) return 0; var audio = {}; audio.context = new Context(); audio.buffers = {}; audio.gains = {}; audio.active = {}; Module.muAudio = audio; } return 1; } catch (e) { return 0; } },  
- 208744: ($0) => { var caminho = UTF8ToString($0); var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var dados = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) dados[i] = texto.charCodeAt(i) & 0xFF; var barra = caminho.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {} } try { FS.writeFile(caminho, dados); } catch (e) { err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e); return -2; } return dados.length; },  
- 209492: ($0) => { var caminho = UTF8ToString($0); try { var tamanho = FS.stat(caminho).size; FS.unlink(caminho); return tamanho; } catch (e) { return 0; } },  
- 209633: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var fila = sock.recv_queue ? sock.recv_queue.length : 0; if (fila > 0) return fila; var chave = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[chave] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
- 210054: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
+  209024: ($0) => { var box = document.getElementById('mu_diag'); if (!box) { box = document.createElement('pre'); box.id = 'mu_diag'; box.style.cssText = 'position:fixed;left:0;top:0;right:0;max-height:50%;' + 'overflow:auto;margin:0;padding:8px;z-index:9999;' + 'background:rgba(120,0,0,.9);color:#fff;font:12px monospace;' + 'white-space:pre-wrap'; document.body.appendChild(box); } box.textContent += UTF8ToString($0) + "\n"; },  
+ 209438: () => { if (Module.muAudio && Module.muAudio.context) { try { Module.muAudio.context.close(); } catch (e) {} Module.muAudio = null; } },  
+ 209568: ($0, $1, $2, $3, $4) => { var audio = Module.muAudio; if (!audio) return 0; var slot = $0; var ptr = $1; var frames = $2; var channels = $3; var rate = $4; var buffer = audio.context.createBuffer(channels, frames, rate); for (var c = 0; c < channels; ++c) { var out = buffer.getChannelData(c); for (var i = 0; i < frames; ++i) { var sample = HEAP16[(ptr >> 1) + i * channels + c]; out[i] = sample / 32768.0; } } audio.buffers[slot] = buffer; if (!audio.gains[slot]) { var gain = audio.context.createGain(); gain.connect(audio.context.destination); audio.gains[slot] = gain; } audio.active[slot] = []; return 1; },  
+ 210157: ($0) => { var audio = Module.muAudio; if (!audio) return; delete audio.buffers[$0]; if (audio.gains[$0]) { audio.gains[$0].disconnect(); delete audio.gains[$0]; } delete audio.active[$0]; },  
+ 210339: ($0, $1) => { var audio = Module.muAudio; if (!audio || !audio.buffers[$0]) return 0; if (audio.context.state === 'suspended') audio.context.resume(); var source = audio.context.createBufferSource(); source.buffer = audio.buffers[$0]; source.loop = ($1 != 0); source.connect(audio.gains[$0]); var list = audio.active[$0] || (audio.active[$0] = []); source.onended = function() { var index = list.indexOf(source); if (index >= 0) list.splice(index, 1); }; list.push(source); source.start(0); return 1; },  
+ 210830: ($0) => { var audio = Module.muAudio; if (!audio || !audio.active[$0]) return; var list = audio.active[$0]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[$0] = []; },  
+ 211035: () => { var audio = Module.muAudio; if (!audio) return; for (var slot in audio.active) { var list = audio.active[slot]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[slot] = []; } },  
+ 211258: ($0, $1) => { var audio = Module.muAudio; if (audio && audio.gains[$0]) audio.gains[$0].gain.value = $1; },  
+ 211353: () => { try { if (!Module.muAudio) { var Context = window.AudioContext || window.webkitAudioContext; if (!Context) return 0; var audio = {}; audio.context = new Context(); audio.buffers = {}; audio.gains = {}; audio.active = {}; Module.muAudio = audio; } return 1; } catch (e) { return 0; } },  
+ 211640: ($0) => { var caminho = UTF8ToString($0); var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var dados = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) dados[i] = texto.charCodeAt(i) & 0xFF; var barra = caminho.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {} } try { FS.writeFile(caminho, dados); } catch (e) { err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e); return -2; } return dados.length; },  
+ 212388: ($0) => { var caminho = UTF8ToString($0); try { var tamanho = FS.stat(caminho).size; FS.unlink(caminho); return tamanho; } catch (e) { return 0; } },  
+ 212529: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var fila = sock.recv_queue ? sock.recv_queue.length : 0; if (fila > 0) return fila; var chave = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[chave] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
+ 212950: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
 };
 
 // Imports from the Wasm binary.
@@ -8417,6 +8451,8 @@ var wasmImports = {
   /** @export */
   glBindBuffer: _glBindBuffer,
   /** @export */
+  glBindBufferBase: _glBindBufferBase,
+  /** @export */
   glBindTexture: _glBindTexture,
   /** @export */
   glBindVertexArray: _glBindVertexArray,
@@ -8461,8 +8497,6 @@ var wasmImports = {
   /** @export */
   glEnableVertexAttribArray: _glEnableVertexAttribArray,
   /** @export */
-  glFlush: _glFlush,
-  /** @export */
   glGenBuffers: _glGenBuffers,
   /** @export */
   glGenTextures: _glGenTextures,
@@ -8483,6 +8517,8 @@ var wasmImports = {
   /** @export */
   glGetString: _glGetString,
   /** @export */
+  glGetUniformBlockIndex: _glGetUniformBlockIndex,
+  /** @export */
   glGetUniformLocation: _glGetUniformLocation,
   /** @export */
   glLinkProgram: _glLinkProgram,
@@ -8497,11 +8533,15 @@ var wasmImports = {
   /** @export */
   glTexParameteri: _glTexParameteri,
   /** @export */
+  glTexSubImage2D: _glTexSubImage2D,
+  /** @export */
   glUniform1f: _glUniform1f,
   /** @export */
   glUniform1i: _glUniform1i,
   /** @export */
   glUniform3f: _glUniform3f,
+  /** @export */
+  glUniformBlockBinding: _glUniformBlockBinding,
   /** @export */
   glUniformMatrix4fv: _glUniformMatrix4fv,
   /** @export */

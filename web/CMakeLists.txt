@@ -52,6 +52,10 @@ add_executable(mu_legacy_web
     WebPlatform.cpp
     ../source/Platform/LegacyRenderAdapter.cpp
     ../source/Platform/GlslLegacyRenderAdapter.cpp
+    # Sem isto o link do Web fica com BeginOpaqueWorldRenderQueue e companhia
+    # indefinidos. Nao e erro de link no Emscripten: vira um aviso e a chamada
+    # aborta em runtime, e RenderObjects() chama a fila incondicionalmente.
+    ../source/Platform/RenderPipeline.cpp
     ../source/Platform/LegacyMatrixStack.cpp
     WebInputBackend.cpp
     WebAudioBackend.cpp
