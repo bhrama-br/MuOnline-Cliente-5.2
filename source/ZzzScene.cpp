@@ -137,6 +137,23 @@ static void ParseRenderFeatureFlag(const char* commandLine, const char* prefix, 
 	else if (::strncmp(argument, "on", 2) == 0)
 		Platform::SetRenderFeatureMode(feature, Platform::RenderFeatureEnabled);
 }
+
+// `-<prefixo>=ID1,ID2,...`. Ausente limpa a lista, para que remover a flag da
+// linha de comando volte ao comportamento padrao em vez de manter a ultima.
+static void ParseModelListFlag(const char* commandLine, const char* prefix, void (*setter)(const char*))
+{
+	const char* argument = ::strstr(commandLine, prefix);
+	if (argument == NULL) { setter(NULL); return; }
+	argument += strlen(prefix);
+	char list[512];
+	size_t length = 0;
+	while (argument[length] != 0 && argument[length] != ' ' && argument[length] != '\t' &&
+		length + 1 < sizeof(list))
+		++length;
+	memcpy(list, argument, length);
+	list[length] = 0;
+	setter(list);
+}
 #include "Interfaces.h"
 #include "Camera3D.h"
 #include "CharacterList.h"
@@ -3208,6 +3225,8 @@ void RenderScene(HDC hDC)
     ParseRenderFeatureFlag(commandLine, "-instancing=", Platform::RenderFeatureInstancing);
     ParseRenderFeatureFlag(commandLine, "-statictransformcache=", Platform::RenderFeatureStaticTransformCache);
     ParseRenderFeatureFlag(commandLine, "-batching=", Platform::RenderFeatureBatching);
+    ParseRenderFeatureFlag(commandLine, "-meshcache=", Platform::RenderFeatureMeshCache);
+    ParseModelListFlag(commandLine, "-instancing-models=", &Platform::SetInstancingModelWhitelist);
     Platform::BeginGpuSkinningFrame();
 	g_renderStatsStart = RenderStatsNowMicroseconds();
 	memset(g_renderPhaseUs, 0, sizeof(g_renderPhaseUs));

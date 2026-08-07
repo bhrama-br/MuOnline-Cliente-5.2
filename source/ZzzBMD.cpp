@@ -135,6 +135,11 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
     // `Vertex_t`. Expandir preserva costuras de UV/normais; deduplicar cantos
     // com os tres indices identicos recupera o reuso de vertice sem desfazer
     // costura nenhuma. Tipicamente 2,5-3x menos vertices em modelo organico.
+    // Com a deduplicacao desligada, cada canto vira um vertice proprio e o IBO
+    // fica sendo 0,1,2,... — exatamente o comportamento anterior, para servir de
+    // termo de comparacao caso a dedup seja suspeita de alguma diferenca visual.
+    const bool deduplicate = Platform::IsRenderFeatureActive(Platform::RenderFeatureMeshCache);
+
     Platform::StaticMeshVertex* vertices = new Platform::StaticMeshVertex[indexCount];
     unsigned int* indices = new unsigned int[indexCount];
     std::map<unsigned long long, unsigned int> cornerToVertex;
@@ -164,15 +169,19 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
 
             // NumVertices/NumNormals/NumTexCoords sao `short`, entao 16 bits por
             // componente cobrem qualquer BMD valido sem colisao.
-            const unsigned long long cornerKey =
-                (static_cast<unsigned long long>(static_cast<unsigned short>(vertexIndex))) |
-                (static_cast<unsigned long long>(static_cast<unsigned short>(normalIndex)) << 16) |
-                (static_cast<unsigned long long>(static_cast<unsigned short>(texCoordIndex)) << 32);
-            std::map<unsigned long long, unsigned int>::const_iterator found = cornerToVertex.find(cornerKey);
-            if (found != cornerToVertex.end())
+            if (deduplicate)
             {
-                indices[outputIndex++] = found->second;
-                continue;
+                const unsigned long long cornerKey =
+                    (static_cast<unsigned long long>(static_cast<unsigned short>(vertexIndex))) |
+                    (static_cast<unsigned long long>(static_cast<unsigned short>(normalIndex)) << 16) |
+                    (static_cast<unsigned long long>(static_cast<unsigned short>(texCoordIndex)) << 32);
+                std::map<unsigned long long, unsigned int>::const_iterator found = cornerToVertex.find(cornerKey);
+                if (found != cornerToVertex.end())
+                {
+                    indices[outputIndex++] = found->second;
+                    continue;
+                }
+                cornerToVertex[cornerKey] = static_cast<unsigned int>(uniqueVertices);
             }
 
             Platform::StaticMeshVertex& output = vertices[uniqueVertices];
@@ -187,7 +196,6 @@ static bool PrepareStaticGpuMesh(Mesh_t& mesh, int boneCount)
             output.positionBone = static_cast<float>(input.Node);
             output.normalBone = static_cast<float>(normal.Node);
             output.waveSeed = static_cast<float>(vertexIndex);
-            cornerToVertex[cornerKey] = static_cast<unsigned int>(uniqueVertices);
             indices[outputIndex++] = static_cast<unsigned int>(uniqueVertices);
             ++uniqueVertices;
         }
@@ -310,12 +318,28 @@ namespace
         int boneCount;
     };
 
-    InstanceBatchKey g_instanceKey;
-    std::vector<Platform::StaticMeshInstance> g_instances;
-    // As paletas sao copiadas: GpuBoneMatrices aponta para BoneTransform, que o
-    // proximo objeto a animar ja sobrescreveu quando o lote e desenhado.
-    std::vector<float> g_instancePalettes;
-    bool g_instanceBatchOpen = false;
+    // Um balde por chave, nao uma corrida consecutiva. RenderCharactersClient
+    // percorre o array de personagens em ordem de indice, entao instancias do
+    // mesmo modelo quase nunca sao vizinhas: agrupar so consecutivas rendia 0,72
+    // draw instanciado por frame — medido — e ainda assim custava o upload.
+    struct InstanceBucket
+    {
+        InstanceBatchKey key;
+        std::vector<Platform::StaticMeshInstance> instances;
+        // As paletas sao copiadas: GpuBoneMatrices aponta para BoneTransform, que
+        // o proximo objeto a animar ja sobrescreveu quando o lote e desenhado.
+        std::vector<float> palettes;
+    };
+
+    std::vector<InstanceBucket> g_instanceBuckets;
+
+    // So materiais independentes de ordem podem ser reagrupados. Blend aditivo ou
+    // subtrativo depende da ordem de emissao e fica de fora.
+    bool IsReorderableInstanceMaterial(const InstanceBatchKey& key)
+    {
+        return key.depthTest && key.depthMask &&
+            (key.blendMode == InstanceBlendNone || key.blendMode == InstanceBlendAlphaTest);
+    }
 
     void ApplyInstanceBatchState(const InstanceBatchKey& key)
     {
@@ -338,46 +362,52 @@ namespace
 
 void FlushInstanceBatch()
 {
-    if (!g_instanceBatchOpen || g_instances.empty())
-    {
-        g_instances.clear();
-        g_instancePalettes.clear();
-        g_instanceBatchOpen = false;
-        return;
-    }
+    if (g_instanceBuckets.empty()) return;
 
     // ApplyInstanceBatchState chama helpers de estado legado. Hoje nenhum deles
     // descarrega a fila de opacos, mas se algum passar a descarregar, ele
-    // reentraria aqui com o lote ainda aberto e recursaria ate estourar a pilha.
+    // reentraria aqui com os baldes ainda abertos e recursaria ate estourar a
+    // pilha.
     static bool flushing = false;
     if (flushing) return;
     flushing = true;
 
     Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-    const size_t paletteFloats = static_cast<size_t>(g_instanceKey.boneCount) * 12;
-    for (size_t i = 0; i < g_instances.size(); ++i)
-        g_instances[i].boneMatrices = &g_instancePalettes[i * paletteFloats];
-
-    ApplyInstanceBatchState(g_instanceKey);
-    if (!renderer.DrawStaticMeshInstanced(g_instanceKey.meshHandle, &g_instances[0], g_instances.size(),
-            static_cast<float>(WorldTime)))
+    for (size_t b = 0; b < g_instanceBuckets.size(); ++b)
     {
-        // Sem caminho instanciado (lote de um, backend sem suporte, paleta grande
-        // demais): desenha uma a uma, com o mesmo resultado visual.
-        for (size_t i = 0; i < g_instances.size(); ++i)
+        InstanceBucket& bucket = g_instanceBuckets[b];
+        if (bucket.instances.empty()) continue;
+
+        const size_t paletteFloats = static_cast<size_t>(bucket.key.boneCount) * 12;
+        for (size_t i = 0; i < bucket.instances.size(); ++i)
+            bucket.instances[i].boneMatrices = &bucket.palettes[i * paletteFloats];
+
+        ApplyInstanceBatchState(bucket.key);
+        if (!renderer.DrawStaticMeshInstanced(bucket.key.meshHandle, &bucket.instances[0],
+                bucket.instances.size(), static_cast<float>(WorldTime)))
         {
-            const Platform::StaticMeshInstance& instance = g_instances[i];
-            static const float identity[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
-            renderer.DrawStaticMesh(g_instanceKey.meshHandle, instance.color, identity,
-                instance.boneMatrices, instance.boneCount, instance.bodyScale,
-                instance.lighting, instance.lightPosition, instance.postTranslation,
-                instance.wave, static_cast<float>(WorldTime), instance.materialEffect,
-                instance.shadowMap, instance.bodyOrigin, instance.boneScale);
+            // Sem caminho instanciado (lote de um, backend sem suporte, paleta
+            // grande demais): desenha uma a uma, com o mesmo resultado visual.
+            for (size_t i = 0; i < bucket.instances.size(); ++i)
+            {
+                const Platform::StaticMeshInstance& instance = bucket.instances[i];
+                static const float identity[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
+                renderer.DrawStaticMesh(bucket.key.meshHandle, instance.color, identity,
+                    instance.boneMatrices, instance.boneCount, instance.bodyScale,
+                    instance.lighting, instance.lightPosition, instance.postTranslation,
+                    instance.wave, static_cast<float>(WorldTime), instance.materialEffect,
+                    instance.shadowMap, instance.bodyOrigin, instance.boneScale);
+            }
         }
     }
-    g_instances.clear();
-    g_instancePalettes.clear();
-    g_instanceBatchOpen = false;
+    // clear() nos baldes, nao no vetor: preserva a capacidade dos vetores
+    // internos entre frames.
+    for (size_t b = 0; b < g_instanceBuckets.size(); ++b)
+    {
+        g_instanceBuckets[b].instances.clear();
+        g_instanceBuckets[b].palettes.clear();
+    }
+    g_instanceBuckets.clear();
     flushing = false;
 }
 
@@ -1587,14 +1617,26 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     if (staticGpuCandidate)
     {
         Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
-        if (renderer.IsStaticMeshResident(m->GpuMeshHandle))
+        const bool wantDeduplicated = Platform::IsRenderFeatureActive(Platform::RenderFeatureMeshCache);
+        if (renderer.IsStaticMeshResident(m->GpuMeshHandle) && m->GpuMeshDeduplicated == wantDeduplicated)
             gpuMeshPrepared = true;
-        else if (PrepareStaticGpuMesh(*m, GpuBoneMatrixCount))
+        else
         {
-            m->GpuMeshHandle = renderer.UploadStaticMesh(m->GpuStaticVertices, m->GpuStaticVertexCount,
-                m->GpuStaticIndices, m->GpuStaticIndexCount);
-            ReleaseStaticGpuMeshStaging(*m);
-            gpuMeshPrepared = m->GpuMeshHandle != 0;
+            // Modo divergente: a malha residente foi construida com o outro
+            // caminho e precisa sair antes, senao o handle antigo vaza.
+            if (m->GpuMeshHandle != 0)
+            {
+                renderer.ReleaseStaticMesh(m->GpuMeshHandle);
+                m->GpuMeshHandle = 0;
+            }
+            if (PrepareStaticGpuMesh(*m, GpuBoneMatrixCount))
+            {
+                m->GpuMeshHandle = renderer.UploadStaticMesh(m->GpuStaticVertices, m->GpuStaticVertexCount,
+                    m->GpuStaticIndices, m->GpuStaticIndexCount);
+                m->GpuMeshDeduplicated = wantDeduplicated;
+                ReleaseStaticGpuMeshStaging(*m);
+                gpuMeshPrepared = m->GpuMeshHandle != 0;
+            }
         }
     }
     if (gpuMeshPrepared)
@@ -1624,16 +1666,25 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         // GpuStaticMatrix so e identidade quando o modelo tem um osso, e neste
         // caminho a pose ja esta toda na paleta.
         const size_t maxInstanceBones = renderer.GetMaxInstanceBoneCount();
-        const bool canInstance = Platform::IsRenderFeatureActive(Platform::RenderFeatureInstancing) &&
+        const bool canInstance = Platform::ShouldInstanceModel(modelId) &&
             maxInstanceBones > 0 && GpuBoneMatrices != NULL &&
             GpuBoneMatrixCount > 0 && static_cast<size_t>(GpuBoneMatrixCount) <= maxInstanceBones;
 
-        if (canInstance)
+        if (canInstance && IsReorderableInstanceMaterial(key))
         {
-            if (g_instanceBatchOpen && !(g_instanceKey == key))
-                FlushInstanceBatch();
-            g_instanceKey = key;
-            g_instanceBatchOpen = true;
+            // Procura o balde da chave. A varredura e linear porque o numero de
+            // chaves vivas num passe e da ordem de dezenas, nao de milhares.
+            InstanceBucket* bucket = NULL;
+            for (size_t b = 0; b < g_instanceBuckets.size(); ++b)
+            {
+                if (g_instanceBuckets[b].key == key) { bucket = &g_instanceBuckets[b]; break; }
+            }
+            if (bucket == NULL)
+            {
+                g_instanceBuckets.push_back(InstanceBucket());
+                bucket = &g_instanceBuckets.back();
+                bucket->key = key;
+            }
 
             Platform::StaticMeshInstance instance;
             instance.color[0] = BodyLight[0] * blendLight;
@@ -1653,10 +1704,10 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
             instance.boneMatrices = NULL;  // preenchido no flush, a partir da copia
 
             const size_t paletteFloats = static_cast<size_t>(GpuBoneMatrixCount) * 12;
-            const size_t base = g_instancePalettes.size();
-            g_instancePalettes.resize(base + paletteFloats);
-            memcpy(&g_instancePalettes[base], &GpuBoneMatrices[0][0][0], paletteFloats * sizeof(float));
-            g_instances.push_back(instance);
+            const size_t base = bucket->palettes.size();
+            bucket->palettes.resize(base + paletteFloats);
+            memcpy(&bucket->palettes[base], &GpuBoneMatrices[0][0][0], paletteFloats * sizeof(float));
+            bucket->instances.push_back(instance);
             return;
         }
 

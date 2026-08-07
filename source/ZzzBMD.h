@@ -162,6 +162,11 @@ typedef struct _Mesh_t
     // contexto grafico, entao um handle de um contexto morto se identifica como
     // nao residente em vez de desenhar lixo.
     unsigned int GpuMeshHandle;
+    // Com que modo de cache a malha residente foi construida. Uma divergencia
+    // contra a flag corrente forca reconstrucao, senao `-meshcache=compare` nao
+    // compararia nada: a malha e enviada uma vez e ficaria com o modo do primeiro
+    // frame para sempre.
+    bool GpuMeshDeduplicated;
 
     _Mesh_t()
     {
@@ -175,6 +180,7 @@ typedef struct _Mesh_t
         GpuStaticVertexCount = 0;
         GpuStaticIndexCount = 0;
         GpuMeshHandle = 0;
+        GpuMeshDeduplicated = true;
 
         NumVertices = NumNormals = NumTexCoords =
             NumVertexColors = NumTriangles = 0;

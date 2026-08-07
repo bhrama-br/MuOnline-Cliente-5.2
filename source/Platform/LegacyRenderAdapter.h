@@ -299,6 +299,10 @@ namespace Platform
         RenderFeatureInstancing,
         RenderFeatureStaticTransformCache,
         RenderFeatureBatching,
+        // Deduplicacao de cantos e indices de 16 bits na malha residente. Unica
+        // que nasce ligada: ela ja estava em producao sem chave de desligamento,
+        // e o interruptor existe para poder desligar em campo, nao para liberar.
+        RenderFeatureMeshCache,
         RenderFeatureCount
     };
 
@@ -315,6 +319,12 @@ namespace Platform
     // entao uma captura lado a lado compara frames adjacentes.
     bool IsRenderFeatureActive(RenderFeature feature);
     const char* GetRenderFeatureModeName(RenderFeature feature);
+
+    // Rollout gradual do instancing por ID de Models[], no mesmo formato do
+    // whitelist de GPU skinning. NULL/vazia libera todos os modelos elegiveis;
+    // uma lista restringe a ela.
+    void SetInstancingModelWhitelist(const char* modelIds);
+    bool ShouldInstanceModel(int modelId);
 
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();

@@ -57,14 +57,17 @@ namespace
     {
         Platform::RenderFeatureDisabled,  // RenderFeatureInstancing
         Platform::RenderFeatureDisabled,  // RenderFeatureStaticTransformCache
-        Platform::RenderFeatureDisabled   // RenderFeatureBatching
+        Platform::RenderFeatureDisabled,  // RenderFeatureBatching
+        Platform::RenderFeatureEnabled    // RenderFeatureMeshCache
     };
 
-    bool IsWhitelistedGpuSkinningModel(int modelId)
+    char g_InstancingModelWhitelist[512] = { 0 };
+
+    bool IsModelInList(const char* list, int modelId)
     {
-        if (modelId < 0 || g_GpuSkinningModelWhitelist[0] == 0)
+        if (modelId < 0 || list == NULL || list[0] == 0)
             return false;
-        const char* entry = g_GpuSkinningModelWhitelist;
+        const char* entry = list;
         while (*entry != 0)
         {
             while (*entry == ',' || *entry == ' ' || *entry == '\t') ++entry;
@@ -80,6 +83,11 @@ namespace
             while (*entry != 0 && *entry != ',') ++entry;
         }
         return false;
+    }
+
+    bool IsWhitelistedGpuSkinningModel(int modelId)
+    {
+        return IsModelInList(g_GpuSkinningModelWhitelist, modelId);
     }
 }
 
@@ -229,6 +237,20 @@ bool Platform::IsRenderFeatureActive(RenderFeature feature)
     if (mode == RenderFeatureDisabled) return false;
     if (mode == RenderFeatureEnabled) return true;
     return (g_GpuSkinningFrame & 1UL) == 0;
+}
+
+void Platform::SetInstancingModelWhitelist(const char* modelIds)
+{
+    if (modelIds == NULL) { g_InstancingModelWhitelist[0] = 0; return; }
+    strncpy(g_InstancingModelWhitelist, modelIds, sizeof(g_InstancingModelWhitelist) - 1);
+    g_InstancingModelWhitelist[sizeof(g_InstancingModelWhitelist) - 1] = 0;
+}
+
+bool Platform::ShouldInstanceModel(int modelId)
+{
+    if (!IsRenderFeatureActive(RenderFeatureInstancing)) return false;
+    // Lista vazia libera todos: o interruptor de liberacao e a propria flag.
+    return g_InstancingModelWhitelist[0] == 0 || IsModelInList(g_InstancingModelWhitelist, modelId);
 }
 
 const char* Platform::GetRenderFeatureModeName(RenderFeature feature)

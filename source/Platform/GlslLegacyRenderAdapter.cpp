@@ -328,7 +328,7 @@ namespace
               m_fogLocation(-1), m_fogColorLocation(-1), m_fogStartLocation(-1), m_fogEndLocation(-1),
               m_fogEnabled(false), m_fogStart(0.f), m_fogEnd(1.f),
               m_alphaTestEnabled(false), m_texture2DEnabled(false), m_depthTestEnabled(false), m_texture(0), m_batching(false), m_failed(false), m_logged(false),
-              m_resourceGeneration(1), m_bonePaletteTexture(0), m_instanceBuffer(0),
+              m_resourceGeneration(1), m_bonePaletteTexture(0), m_bonePaletteWidth(0), m_bonePaletteHeight(0), m_instanceBuffer(0),
               m_instancedLocation(-1), m_bonePaletteLocation(-1), m_instancedEnviado(-1),
               m_instancingUnavailable(false)
         {
@@ -876,6 +876,8 @@ namespace
             m_instancedLocation = -1;
             m_bonePaletteLocation = -1;
             m_bonePaletteTexture = 0;
+            m_bonePaletteWidth = 0;
+            m_bonePaletteHeight = 0;
             m_instanceBuffer = 0;
             m_instancingUnavailable = false;
             m_depthTestEnabled = false;
@@ -933,6 +935,8 @@ namespace
             {
                 glGenTextures(1, &m_bonePaletteTexture);
                 if (m_bonePaletteTexture == 0) { m_instancingUnavailable = true; return false; }
+                m_bonePaletteWidth = 0;
+                m_bonePaletteHeight = 0;
                 glActiveTexture(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
                 // texelFetch nao filtra, mas GL exige filtro completo para a
@@ -974,7 +978,7 @@ namespace
             // do IBO e uma decisao do backend, e o buffer temporario morre nesta
             // funcao em vez de virar mais um array vivo no Mesh_t.
             GLsizeiptr indexBytes;
-            if (vertexCount <= 65536)
+            if (vertexCount <= 65536 && Platform::IsRenderFeatureActive(Platform::RenderFeatureMeshCache))
             {
                 mesh.indexType = GL_UNSIGNED_SHORT;
                 indexBytes = static_cast<GLsizeiptr>(indexCount * sizeof(unsigned short));
@@ -1145,8 +1149,23 @@ namespace
 
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, static_cast<GLsizei>(rowTexels),
-                static_cast<GLsizei>(count), 0, GL_RGBA, GL_FLOAT, &m_instancePalette[0]);
+            // glTexImage2D REALOCA o armazenamento. Chamado por lote, ele criava
+            // uma bolha de pipeline por draw e foi metade do custo que fez o
+            // instancing piorar o frame em 42% na primeira medicao. A textura
+            // agora cresce por potencia de dois e o caminho normal e TexSubImage.
+            if (static_cast<GLsizei>(rowTexels) > m_bonePaletteWidth ||
+                static_cast<GLsizei>(count) > m_bonePaletteHeight)
+            {
+                GLsizei width = m_bonePaletteWidth > 0 ? m_bonePaletteWidth : 64;
+                GLsizei height = m_bonePaletteHeight > 0 ? m_bonePaletteHeight : 16;
+                while (width < static_cast<GLsizei>(rowTexels)) width *= 2;
+                while (height < static_cast<GLsizei>(count)) height *= 2;
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+                m_bonePaletteWidth = width;
+                m_bonePaletteHeight = height;
+            }
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(rowTexels),
+                static_cast<GLsizei>(count), GL_RGBA, GL_FLOAT, &m_instancePalette[0]);
             m_frameStats.bonePaletteUploadBytes += static_cast<unsigned long long>(m_instancePalette.size() * sizeof(float));
 
             // Atributos por instancia, no mesmo layout declarado no shader.
@@ -1627,6 +1646,8 @@ namespace
         // sirva aos dois. kInstanceFloats sao 5 vec4 por instancia.
         enum { kMaxInstanceBones = 200, kInstanceFloats = 20 };
         GLuint m_bonePaletteTexture;
+        GLsizei m_bonePaletteWidth;
+        GLsizei m_bonePaletteHeight;
         GLuint m_instanceBuffer;
         std::vector<float> m_instancePalette;
         std::vector<float> m_instanceAttributes;
