@@ -1,3 +1,4 @@
+#include <chrono>
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -225,11 +226,38 @@ static void RememberLegacy3DMatrices(const float* projection, const float* model
 	g_legacy3DMatricesKnown = true;
 }
 
+// glGetFloatv e uma consulta SINCRONA: o driver precisa drenar o pipeline antes
+// de devolver o estado. `setup` deu 41% do frame na v9 e nao ha nada nele que
+// custe isso em CPU, entao estas leituras sao o principal suspeito. O contador
+// existe para provar ou descartar isso, em vez de continuar supondo.
+unsigned long long g_matrixReadbackUs = 0;
+unsigned long long g_matrixReadbackCalls = 0;
+
+namespace
+{
+	struct ScopedMatrixReadbackTimer
+	{
+		ScopedMatrixReadbackTimer()
+			: start(std::chrono::steady_clock::now()) {}
+		~ScopedMatrixReadbackTimer()
+		{
+			g_matrixReadbackUs += static_cast<unsigned long long>(
+				std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - start).count());
+			++g_matrixReadbackCalls;
+		}
+		std::chrono::steady_clock::time_point start;
+	};
+}
+
 void GetOpenGLMatrix(float Matrix[3][4])
 {
 	float OpenGLMatrix[16];
 #ifdef _WIN32
-	glGetFloatv(GL_MODELVIEW_MATRIX,OpenGLMatrix);
+	{
+		ScopedMatrixReadbackTimer timer;
+		glGetFloatv(GL_MODELVIEW_MATRIX,OpenGLMatrix);
+	}
 #else
 	// GLES3 nao tem pilha de matrizes nem GL_MODELVIEW_MATRIX; a leitura vinha
 	// como INVALID_ENUM e o destino ficava com lixo. A fonte e a pilha em CPU.
@@ -253,8 +281,11 @@ void SyncLegacyRenderMatricesAndCamera(float cameraMatrix[3][4])
 #ifdef _WIN32
 	float projection[16];
 	float modelView[16];
-	glGetFloatv(GL_PROJECTION_MATRIX, projection);
-	glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+	{
+		ScopedMatrixReadbackTimer timer;
+		glGetFloatv(GL_PROJECTION_MATRIX, projection);
+		glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+	}
 	Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
 	RememberLegacy3DMatrices(projection, modelView);
 
@@ -980,8 +1011,11 @@ void SyncLegacyRenderMatrices()
     // No PC as matrizes seguem vivendo na pilha do OpenGL.
     float projection[16];
     float modelView[16];
-    glGetFloatv(GL_PROJECTION_MATRIX, projection);
-    glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+    {
+        ScopedMatrixReadbackTimer timer;
+        glGetFloatv(GL_PROJECTION_MATRIX, projection);
+        glGetFloatv(GL_MODELVIEW_MATRIX, modelView);
+    }
     Platform::GetLegacyRenderAdapter().SetMatrices(projection, modelView);
     RememberLegacy3DMatrices(projection, modelView);
 #else
