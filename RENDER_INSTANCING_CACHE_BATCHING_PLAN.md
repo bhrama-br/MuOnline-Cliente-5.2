@@ -24,6 +24,18 @@ e **WebGL 2 / GLES 3** com o mesmo código — isso elimina SSBO, `GL_TEXTURE_BU
 **A única entrega com ganho de tempo reproduzível não estava no plano.** Ela saiu da
 medição por fase, feita depois de a segunda otimização sem resultado.
 
+### Ressalva importante sobre os "zero"
+
+**Zero é zero *nesta máquina*, onde a GPU é o gargalo.** Numa máquina com CPU mais
+fraca e a mesma GPU, o quadro inverte: o cache de transform (−70% de skinning) e a
+submissão em bloco (−470k chamadas virtuais por frame) passariam a valer, porque
+ali a CPU seria o polo mais longo.
+
+Cliente de MU roda num leque grande de hardware. Chegou-se a recomendar apagar
+essas fases por "não renderem nada" — **isso foi apressado e fica retratado aqui**.
+A decisão certa exige medir num PC representativo do pior caso de CPU, não no
+melhor. Até lá elas ficam desligadas por padrão e disponíveis por flag.
+
 Correções de bugs pré-existentes encontradas no caminho:
 
 - `Platform/RenderPipeline.cpp` nunca esteve no `web/CMakeLists.txt`: o cliente Web

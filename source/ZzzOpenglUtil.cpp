@@ -894,13 +894,36 @@ void EnableLightMap()
 		SetLegacyFog(true);
 }
 
+// Escala apenas do viewport 3D, em porcento. 100 = normal.
+//
+// DIAGNOSTICO, nao recurso. Serve para responder uma unica pergunta: o frame
+// escala com a area de pixel? Se sim, o custo de GPU e fill rate (overdraw,
+// shading, textura); se nao, e vertice/draw call. Trocar a resolucao da janela
+// nao serve para isso porque mexe junto na escala da UI e no numero de objetos
+// visiveis — aqui geometria, draws e camera ficam identicos e so a contagem de
+// pixels muda.
+//
+// A cena passa a ocupar um canto da janela e o picking sai do lugar. Isso e
+// esperado: OpenglWindowWidth/Height continuam com o valor real justamente para
+// que projecao e frustum nao mudem.
+int g_renderScalePercent = 100;
+
 void glViewport2(int x,int y,int Width,int Height)
 {
    	OpenglWindowX      = x;
    	OpenglWindowY      = y;
    	OpenglWindowWidth  = Width;
    	OpenglWindowHeight = Height;
-    glViewport(x,WindowHeight-(y+Height),Width,Height);
+	int viewportWidth  = Width;
+	int viewportHeight = Height;
+	if (g_renderScalePercent != 100 && g_renderScalePercent > 0)
+	{
+		viewportWidth  = Width  * g_renderScalePercent / 100;
+		viewportHeight = Height * g_renderScalePercent / 100;
+		if (viewportWidth  < 1) viewportWidth  = 1;
+		if (viewportHeight < 1) viewportHeight = 1;
+	}
+    glViewport(x,WindowHeight-(y+Height),viewportWidth,viewportHeight);
 }
 
 extern float g_fScreenRate_x;

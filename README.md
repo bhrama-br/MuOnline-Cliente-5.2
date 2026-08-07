@@ -164,6 +164,27 @@ Vale saber: o espelho de matrizes alimenta a pilha em CPU **sempre**, com a flag
 ligada ou não — ela controla apenas de onde as matrizes são *lidas*. Desligar não
 remove a interceptação, só volta a ler do driver com `glGetFloatv`.
 
+### Diagnóstico de fill rate
+
+`-renderscale=N` (N em 1..100) escala **apenas o viewport 3D**, mantendo
+geometria, draws, câmera e UI idênticos. Serve para uma pergunta só: o frame
+escala com a área de pixel?
+
+```
+.\Main.exe -renderstatscsv -renderscale=100
+.\Main.exe -renderstatscsv -renderscale=50    # 1/4 dos pixels
+```
+
+Se `gpu_us` cair perto de 4× entre os dois, o custo de GPU é **fill rate** —
+overdraw, shading, textura. Se quase não mudar, é **vértice/draw call**, e o
+caminho é outro.
+
+A cena passa a ocupar um canto da janela e o clique sai do lugar. É esperado:
+`OpenglWindowWidth/Height` mantêm o valor real de propósito, para que projeção e
+frustum não mudem e só a contagem de pixels varie. **Não é recurso, é
+instrumento** — a coluna `render_scale` no CSV registra o valor para que uma
+captura a 50% não pareça um ganho mágico.
+
 ### Medição
 
 `-renderstatscsv` grava `RenderPerformance_v9.csv` a cada 120 frames, após 180 de
