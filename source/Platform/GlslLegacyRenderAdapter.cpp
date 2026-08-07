@@ -1705,10 +1705,17 @@ namespace Platform
 {
     void GlslBeginGpuFrameTimer()
     {
-        if (g_gpuTimerUnavailable || !g_ModernGl.HasTimerQuery()) { g_gpuTimerUnavailable = true; return; }
+        if (g_gpuTimerUnavailable) return;
+        // NAO travar como indisponivel aqui. As funcoes GL sao resolvidas em
+        // EnsureResources, no primeiro DESENHO, e este Begin roda no topo do
+        // frame — antes disso. Marcar indisponivel no frame 1 desligava a
+        // medicao para sempre.
+        if (!g_ModernGl.HasTimerQuery()) return;
         if (g_gpuTimerQueries[0] == 0)
         {
             glGenQueries(kGpuTimerSlots, g_gpuTimerQueries);
+            // So aqui a indisponibilidade e definitiva: o driver tem as funcoes
+            // e mesmo assim recusou criar as queries.
             if (g_gpuTimerQueries[0] == 0) { g_gpuTimerUnavailable = true; return; }
         }
 
@@ -1743,7 +1750,11 @@ namespace Platform
     unsigned long long GlslGetLastGpuFrameTimeUs() { return g_gpuLastFrameTimeUs; }
     int GlslGetGpuFrameTimerState()
     {
-        if (g_gpuTimerUnavailable || !g_ModernGl.HasTimerQuery()) return 0;
+        if (g_gpuTimerUnavailable) return 0;
+        // Distingue "o driver nao tem timer query" de "as funcoes ainda nao
+        // foram resolvidas", que era exatamente a confusao que escondeu o bug.
+        if (!g_ModernGl.HasTimerQuery()) return 3;
+        if (g_gpuTimerQueries[0] == 0) return 1;
         return g_gpuLastFrameTimeUs > 0 ? 2 : 1;
     }
 }
