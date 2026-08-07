@@ -8,6 +8,30 @@ e **WebGL 2 / GLES 3** com o mesmo código — isso elimina SSBO, `GL_TEXTURE_BU
 
 ---
 
+## 0. Placar final
+
+| entrega | contador | tempo de frame | estado |
+| --- | --- | --- | --- |
+| Fase 1 — cache de malha | −50% upload, índices 16 bits | não isolado | `-meshcache`, **default on** |
+| Fase 2 — cache de transform | skinning CPU −70% | **zero** | `-statictransformcache`, default off |
+| Fase 3.1 — shadow state | −12.001 `glUniform`/frame | **zero** | `-batching`, default off |
+| Fase 3.2 — submissão em bloco | −470k chamadas virtuais/frame | **zero** | `-batching`, default off |
+| Fase 3.2 — fusão de comandos | não fundiu nada até a 3.3 | **zero** | `-batching`, default off |
+| Fase 3.3 — redução de flushes | fila desfragmentada | não isolado | `-batching`, default off |
+| Fase 4 — instancing | 2 draws/frame em Lorencia | −42% **pior**, depois neutro | `-instancing`, default off |
+| **Espelho de matrizes em CPU** | **6 → 0 readbacks/frame** | **−41% (7.596 → 4.450 µs)** | `-cpumatrices`, **default on** |
+
+**A única entrega com ganho de tempo reproduzível não estava no plano.** Ela saiu da
+medição por fase, feita depois de a segunda otimização sem resultado.
+
+Correções de bugs pré-existentes encontradas no caminho:
+
+- `Platform/RenderPipeline.cpp` nunca esteve no `web/CMakeLists.txt`: o cliente Web
+  abortava em runtime ao renderizar objetos.
+- `uShadowMap` vazava de `DrawStaticMesh` para o caminho imediato, achatando geometria.
+- `polygon == 4` alocava 6 vértices e escrevia 4, enviando o resto não inicializado.
+- Timer de CPU em `GetTickCount` (granularidade 15,6 ms) não conseguia medir um frame de 5 ms.
+
 ## 0. Progresso
 
 - [x] **Fase 0 — Instrumentação e baseline**

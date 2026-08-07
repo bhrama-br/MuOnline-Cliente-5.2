@@ -156,6 +156,14 @@ cintilação — é o jeito mais rápido de achar uma regressão visual.
 Escada de rollout sugerida, a mesma já validada pelo GPU skinning: `off` →
 `compare` nas cenas de referência → `on` em QA → `on` em produção.
 
+`-cpumatrices` já percorreu essa escada: 50 amostras em 5 mundos (Lorencia,
+Dungeon, Devias, Noria) e na seleção de personagem, todas com divergência de
+1,0e-6 contra o driver. Está **ligada por padrão**; `-cpumatrices=off` reverte.
+
+Vale saber: o espelho de matrizes alimenta a pilha em CPU **sempre**, com a flag
+ligada ou não — ela controla apenas de onde as matrizes são *lidas*. Desligar não
+remove a interceptação, só volta a ler do driver com `glGetFloatv`.
+
 ### Medição
 
 `-renderstatscsv` grava `RenderPerformance_v9.csv` a cada 120 frames, após 180 de
