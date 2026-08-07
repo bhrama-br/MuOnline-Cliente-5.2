@@ -90,6 +90,23 @@ namespace
         PFNGLVERTEXATTRIBDIVISORPROC VertexAttribDivisor;
         PFNGLDRAWELEMENTSINSTANCEDPROC DrawElementsInstanced;
         PFNGLDISABLEVERTEXATTRIBARRAYPROC DisableVertexAttribArray;
+        // Timer query. So no desktop: GL_TIME_ELAPSED e glGetQueryObjectui64v
+        // nao existem no WebGL 2 sem EXT_disjoint_timer_query_webgl2.
+#ifndef LEGACY_GLES_RENDERER
+        PFNGLGENQUERIESPROC GenQueries;
+        PFNGLBEGINQUERYPROC BeginQuery;
+        PFNGLENDQUERYPROC EndQuery;
+        PFNGLGETQUERYOBJECTUIVPROC GetQueryObjectuiv;
+        PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v;
+
+        bool HasTimerQuery() const
+        {
+            return GenQueries != NULL && BeginQuery != NULL && EndQuery != NULL &&
+                GetQueryObjectuiv != NULL && GetQueryObjectui64v != NULL;
+        }
+#else
+        bool HasTimerQuery() const { return false; }
+#endif
 
         bool HasInstancing() const
         {
@@ -129,6 +146,10 @@ namespace
             LOAD_GL(Uniform1i); LOAD_GL(Uniform1f); LOAD_GL(Uniform3f); LOAD_GL(UniformBlockBinding);
             LOAD_GL(GetShaderInfoLog); LOAD_GL(GetProgramInfoLog);
             LOAD_GL(VertexAttribDivisor); LOAD_GL(DrawElementsInstanced); LOAD_GL(DisableVertexAttribArray);
+#ifndef LEGACY_GLES_RENDERER
+            LOAD_GL(GenQueries); LOAD_GL(BeginQuery); LOAD_GL(EndQuery);
+            LOAD_GL(GetQueryObjectuiv); LOAD_GL(GetQueryObjectui64v);
+#endif
 #undef LOAD_GL
             return AttachShader != NULL && ActiveTexture != NULL && BindBuffer != NULL && BindBufferBase != NULL && BindVertexArray != NULL && BufferData != NULL && BufferSubData != NULL &&
                 CompileShader != NULL && CreateProgram != NULL && CreateShader != NULL && DeleteBuffers != NULL &&
@@ -175,6 +196,13 @@ namespace
 #define glVertexAttribDivisor g_ModernGl.VertexAttribDivisor
 #define glDrawElementsInstanced g_ModernGl.DrawElementsInstanced
 #define glDisableVertexAttribArray g_ModernGl.DisableVertexAttribArray
+#ifndef LEGACY_GLES_RENDERER
+#define glGenQueries g_ModernGl.GenQueries
+#define glBeginQuery g_ModernGl.BeginQuery
+#define glEndQuery g_ModernGl.EndQuery
+#define glGetQueryObjectuiv g_ModernGl.GetQueryObjectuiv
+#define glGetQueryObjectui64v g_ModernGl.GetQueryObjectui64v
+#endif
 
     struct LegacyVertex
     {
@@ -1657,6 +1685,71 @@ namespace
         bool m_instancingUnavailable;
     };
 }
+
+namespace
+{
+    // Anel de queries: a de um frame so e lida alguns frames depois, e apenas se
+    // ja estiver disponivel. Ler na hora bloquearia — que e exatamente o custo
+    // que esta medicao existe para investigar.
+    enum { kGpuTimerSlots = 4 };
+    GLuint g_gpuTimerQueries[kGpuTimerSlots] = { 0, 0, 0, 0 };
+    bool g_gpuTimerPending[kGpuTimerSlots] = { false, false, false, false };
+    int g_gpuTimerSlot = 0;
+    bool g_gpuTimerActive = false;
+    bool g_gpuTimerUnavailable = false;
+    unsigned long long g_gpuLastFrameTimeUs = 0;
+}
+
+#ifndef LEGACY_GLES_RENDERER
+namespace Platform
+{
+    void GlslBeginGpuFrameTimer()
+    {
+        if (g_gpuTimerUnavailable || !g_ModernGl.HasTimerQuery()) { g_gpuTimerUnavailable = true; return; }
+        if (g_gpuTimerQueries[0] == 0)
+        {
+            glGenQueries(kGpuTimerSlots, g_gpuTimerQueries);
+            if (g_gpuTimerQueries[0] == 0) { g_gpuTimerUnavailable = true; return; }
+        }
+
+        // Colhe o resultado mais antigo que ja esteja pronto.
+        const int oldest = (g_gpuTimerSlot + 1) % kGpuTimerSlots;
+        if (g_gpuTimerPending[oldest])
+        {
+            GLuint disponivel = 0;
+            glGetQueryObjectuiv(g_gpuTimerQueries[oldest], GL_QUERY_RESULT_AVAILABLE, &disponivel);
+            if (disponivel != 0)
+            {
+                GLuint64 nanos = 0;
+                glGetQueryObjectui64v(g_gpuTimerQueries[oldest], GL_QUERY_RESULT, &nanos);
+                g_gpuLastFrameTimeUs = static_cast<unsigned long long>(nanos / 1000ULL);
+                g_gpuTimerPending[oldest] = false;
+            }
+        }
+
+        glBeginQuery(GL_TIME_ELAPSED, g_gpuTimerQueries[g_gpuTimerSlot]);
+        g_gpuTimerActive = true;
+    }
+
+    void GlslEndGpuFrameTimer()
+    {
+        if (!g_gpuTimerActive) return;
+        glEndQuery(GL_TIME_ELAPSED);
+        g_gpuTimerPending[g_gpuTimerSlot] = true;
+        g_gpuTimerSlot = (g_gpuTimerSlot + 1) % kGpuTimerSlots;
+        g_gpuTimerActive = false;
+    }
+
+    unsigned long long GlslGetLastGpuFrameTimeUs() { return g_gpuLastFrameTimeUs; }
+}
+#else
+namespace Platform
+{
+    void GlslBeginGpuFrameTimer() {}
+    void GlslEndGpuFrameTimer() {}
+    unsigned long long GlslGetLastGpuFrameTimeUs() { return 0; }
+}
+#endif
 
 namespace Platform
 {

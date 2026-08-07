@@ -331,6 +331,17 @@ namespace Platform
     void SetInstancingModelWhitelist(const char* modelIds);
     bool ShouldInstanceModel(int modelId);
 
+    // Tempo de GPU do frame, por GL timer query. As medicoes de CPU mostraram a
+    // espera migrando de um ponto de sincronizacao para outro sem o total mudar,
+    // o que so faz sentido se a GPU for o limite. Isto mede esse lado.
+    //
+    // O resultado e lido com atraso de alguns frames e apenas quando ja esta
+    // disponivel: ler na hora seria mais um sincronismo, exatamente o que se quer
+    // eliminar. 0 significa "ainda sem amostra" ou "sem suporte".
+    void BeginGpuFrameTimer();
+    void EndGpuFrameTimer();
+    unsigned long long GetLastGpuFrameTimeUs();
+
     // Seguro de chamar antes de qualquer adapter ter sido instalado.
     void InvalidateLegacyRenderResources();
     // Materializa os sprites pendentes antes de observar ou alterar o framebuffer.

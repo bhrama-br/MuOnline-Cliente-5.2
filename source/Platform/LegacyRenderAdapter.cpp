@@ -240,6 +240,29 @@ bool Platform::IsRenderFeatureActive(RenderFeature feature)
     return (g_GpuSkinningFrame & 1UL) == 0;
 }
 
+namespace Platform
+{
+    // Implementadas no adapter GLSL, que e quem tem o carregador de funcoes GL.
+    void GlslBeginGpuFrameTimer();
+    void GlslEndGpuFrameTimer();
+    unsigned long long GlslGetLastGpuFrameTimeUs();
+}
+
+void Platform::BeginGpuFrameTimer()
+{
+    if (IsGlslLegacyBackendEnabled()) GlslBeginGpuFrameTimer();
+}
+
+void Platform::EndGpuFrameTimer()
+{
+    if (IsGlslLegacyBackendEnabled()) GlslEndGpuFrameTimer();
+}
+
+unsigned long long Platform::GetLastGpuFrameTimeUs()
+{
+    return IsGlslLegacyBackendEnabled() ? GlslGetLastGpuFrameTimeUs() : 0;
+}
+
 void Platform::SetInstancingModelWhitelist(const char* modelIds)
 {
     if (modelIds == NULL) { g_InstancingModelWhitelist[0] = 0; return; }

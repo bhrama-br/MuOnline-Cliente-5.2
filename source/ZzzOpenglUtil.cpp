@@ -969,10 +969,17 @@ void BeginOpengl(int x,int y,int Width,int Height )
                 glGetFloatv(GL_PROJECTION_MATRIX, glProjection);
                 glGetFloatv(GL_MODELVIEW_MATRIX, glModelView);
             }
+            // Relativa, nao absoluta. A entrada de profundidade da projecao vale
+            // centenas quando o far plane e grande: um erro absoluto de 1e-3 ali
+            // e ruido de float, enquanto o mesmo 1e-3 numa entrada de rotacao
+            // (modulo <= 1) seria um defeito real. O numero so e interpretavel
+            // depois de dividido pela escala da entrada.
             for (int i = 0; i < 16; ++i)
             {
-                const float dp = fabsf(glProjection[i] - cpuProjection[i]);
-                const float dm = fabsf(glModelView[i] - cpuModelView[i]);
+                const float escalaP = fabsf(glProjection[i]) > 1.f ? fabsf(glProjection[i]) : 1.f;
+                const float escalaM = fabsf(glModelView[i]) > 1.f ? fabsf(glModelView[i]) : 1.f;
+                const float dp = fabsf(glProjection[i] - cpuProjection[i]) / escalaP;
+                const float dm = fabsf(glModelView[i] - cpuModelView[i]) / escalaM;
                 if (dp > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dp;
                 if (dm > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dm;
             }
