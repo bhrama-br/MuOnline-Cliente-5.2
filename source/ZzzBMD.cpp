@@ -236,6 +236,153 @@ static int GetOpaqueBodyMeshMaterialKey(const BMD& model, const Mesh_t& mesh, in
     return explicitTexture != -1 ? explicitTexture : model.IndexTexture[mesh.Texture];
 }
 
+// A fila guarda opacos com depth-test e os desenha no fim do bloco. Uma emissao
+// imediata so precisa ve-los ja no framebuffer se COMPUSER com ele: blend,
+// aditivo, subtrativo, ou sem depth-test. Geometria opaca com depth-test — mesmo
+// com alpha-test, que escreve profundidade e nao mistura — sai correta em
+// qualquer ordem, e nesse caso a fila pode continuar acumulando.
+//
+// Este era o motivo de a fusao de comandos nao fundir nada: um unico mesh fora do
+// predicado estreito da fila esvaziava tudo que havia sido acumulado.
+static bool ImmediateDrawCompositesWithFramebuffer(int renderFlags, float alpha, const Mesh_t* mesh)
+{
+    const int compositingFlags = RENDER_COLOR | RENDER_BRIGHT | RENDER_DARK |
+        RENDER_CHROME | RENDER_CHROME2 | RENDER_CHROME3 | RENDER_CHROME4 |
+        RENDER_CHROME5 | RENDER_CHROME6 | RENDER_CHROME7 | RENDER_METAL |
+        RENDER_OIL | RENDER_LIGHTMAP | RENDER_NODEPTH;
+    if (alpha < 0.99f) return true;
+    if ((renderFlags & compositingFlags) != 0) return true;
+    // Script de textura e NoneBlendMesh mudam blend por conta propria.
+    if (mesh != NULL && (mesh->NoneBlendMesh || mesh->m_csTScript != NULL)) return true;
+    return false;
+}
+
+static void FlushOpaqueWorldQueueForImmediateDraw(int renderFlags, float alpha, const Mesh_t* mesh)
+{
+    if (!Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching) ||
+        ImmediateDrawCompositesWithFramebuffer(renderFlags, alpha, mesh))
+        Platform::FlushOpaqueWorldRenderQueue();
+}
+
+// ---------------------------------------------------------------------------
+// Coletor de instancias
+//
+// Instancias consecutivas da mesma malha com o mesmo estado viram um
+// glDrawElementsInstanced. O estado e capturado por valor, e nao herdado do GL:
+// no flush ele e reaplicado, entao o lote nao depende de nada ter permanecido
+// intacto entre a submissao e o desenho.
+//
+// wave, efeito de material e shadow map NAO entram na chave — viraram atributo
+// por instancia no shader justamente para nao fragmentar o lote.
+// ---------------------------------------------------------------------------
+namespace
+{
+    enum InstanceBlendMode
+    {
+        InstanceBlendNone,
+        InstanceBlendAlpha,
+        InstanceBlendAlphaMinus,
+        InstanceBlendLightMap,
+        InstanceBlendAlphaTest
+    };
+
+    struct InstanceBatchKey
+    {
+        InstanceBatchKey()
+            : meshHandle(0), textureIndex(-1), textureNumber(0), blendMode(InstanceBlendNone),
+              texture2D(true), depthMask(true), depthTest(true), boneCount(0) {}
+
+        bool operator==(const InstanceBatchKey& other) const
+        {
+            return meshHandle == other.meshHandle && textureIndex == other.textureIndex &&
+                textureNumber == other.textureNumber && blendMode == other.blendMode &&
+                texture2D == other.texture2D && depthMask == other.depthMask &&
+                depthTest == other.depthTest && boneCount == other.boneCount;
+        }
+
+        unsigned int meshHandle;
+        int textureIndex;
+        unsigned int textureNumber;
+        InstanceBlendMode blendMode;
+        bool texture2D;
+        bool depthMask;
+        bool depthTest;
+        int boneCount;
+    };
+
+    InstanceBatchKey g_instanceKey;
+    std::vector<Platform::StaticMeshInstance> g_instances;
+    // As paletas sao copiadas: GpuBoneMatrices aponta para BoneTransform, que o
+    // proximo objeto a animar ja sobrescreveu quando o lote e desenhado.
+    std::vector<float> g_instancePalettes;
+    bool g_instanceBatchOpen = false;
+
+    void ApplyInstanceBatchState(const InstanceBatchKey& key)
+    {
+        BindTexture(key.textureIndex);
+        switch (key.blendMode)
+        {
+        case InstanceBlendAlpha:      EnableAlphaBlend(); break;
+        case InstanceBlendAlphaMinus: EnableAlphaBlendMinus(); break;
+        case InstanceBlendLightMap:   EnableLightMap(); break;
+        case InstanceBlendAlphaTest:  EnableAlphaTest(); break;
+        default:                      DisableAlphaBlend(); break;
+        }
+        if (!key.depthMask) DisableDepthMask();
+        if (!key.depthTest) DisableDepthTest();
+        Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+        renderer.SetTexture2D(key.texture2D);
+        if (key.texture2D) renderer.BindTexture(key.textureNumber);
+    }
+}
+
+void FlushInstanceBatch()
+{
+    if (!g_instanceBatchOpen || g_instances.empty())
+    {
+        g_instances.clear();
+        g_instancePalettes.clear();
+        g_instanceBatchOpen = false;
+        return;
+    }
+
+    Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+    const size_t paletteFloats = static_cast<size_t>(g_instanceKey.boneCount) * 12;
+    for (size_t i = 0; i < g_instances.size(); ++i)
+        g_instances[i].boneMatrices = &g_instancePalettes[i * paletteFloats];
+
+    ApplyInstanceBatchState(g_instanceKey);
+    if (!renderer.DrawStaticMeshInstanced(g_instanceKey.meshHandle, &g_instances[0], g_instances.size()))
+    {
+        // Sem caminho instanciado (lote de um, backend sem suporte, paleta grande
+        // demais): desenha uma a uma, com o mesmo resultado visual.
+        for (size_t i = 0; i < g_instances.size(); ++i)
+        {
+            const Platform::StaticMeshInstance& instance = g_instances[i];
+            static const float identity[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
+            renderer.DrawStaticMesh(g_instanceKey.meshHandle, instance.color, identity,
+                instance.boneMatrices, instance.boneCount, instance.bodyScale,
+                instance.lighting, instance.lightPosition, instance.postTranslation,
+                instance.wave, static_cast<float>(WorldTime), instance.materialEffect,
+                instance.shadowMap, instance.bodyOrigin, instance.boneScale);
+        }
+    }
+    g_instances.clear();
+    g_instancePalettes.clear();
+    g_instanceBatchOpen = false;
+}
+
+namespace
+{
+    // Registra o flush na mesma plumbing de barreiras da fila de opacos, para
+    // nao existir uma segunda lista de pontos de descarga saindo de sincronia.
+    struct InstanceBatchRegistrar
+    {
+        InstanceBatchRegistrar() { Platform::SetInstanceBatchFlushCallback(&FlushInstanceBatch); }
+    };
+    InstanceBatchRegistrar g_instanceBatchRegistrar;
+}
+
 unsigned char ShadowBuffer[256 * 256];
 int           ShadowBufferWidth = 256;
 int           ShadowBufferHeight = 256;
@@ -1444,39 +1591,74 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     if (gpuMeshPrepared)
     {
         Platform::ILegacyRenderAdapter& renderer = Platform::GetLegacyRenderAdapter();
+        const bool gpuBlendMesh = blendMeshIndex <= -2 || m->Texture == blendMeshIndex;
+        const float blendLight = gpuBlendMesh ? blendMeshAlpha : 1.f;
+        const bool gpuLighting = gpuMaterialEffect == 0 && LightEnable && !gpuBlendMesh;
+
+        InstanceBatchKey key;
+        key.meshHandle = m->GpuMeshHandle;
+        key.textureIndex = gpuTextureIndex;
+        key.textureNumber = gpuUntexturedBright ? 0 : gpuTexture->TextureNumber;
+        key.texture2D = !gpuUntexturedBright;
+        key.depthMask = !gpuUntexturedBright;
+        key.depthTest = (renderFlags & RENDER_NODEPTH) == 0;
+        key.boneCount = GpuBoneMatrixCount;
+        if (gpuBlendMesh)
+            key.blendMode = ((renderFlags & RENDER_DARK) != 0) ? InstanceBlendAlphaMinus : InstanceBlendAlpha;
+        else if ((renderFlags & RENDER_BRIGHT) != 0) key.blendMode = InstanceBlendAlpha;
+        else if ((renderFlags & RENDER_DARK) != 0) key.blendMode = InstanceBlendAlphaMinus;
+        else if ((renderFlags & RENDER_LIGHTMAP) != 0) key.blendMode = InstanceBlendLightMap;
+        else if (gpuTexture->Components == 4) key.blendMode = InstanceBlendAlphaTest;
+        else key.blendMode = InstanceBlendNone;
+
+        // O caminho instanciado exige que a paleta seja o unico transformador:
+        // GpuStaticMatrix so e identidade quando o modelo tem um osso, e neste
+        // caminho a pose ja esta toda na paleta.
+        const size_t maxInstanceBones = renderer.GetMaxInstanceBoneCount();
+        const bool canInstance = Platform::IsRenderFeatureActive(Platform::RenderFeatureInstancing) &&
+            maxInstanceBones > 0 && GpuBoneMatrices != NULL &&
+            GpuBoneMatrixCount > 0 && static_cast<size_t>(GpuBoneMatrixCount) <= maxInstanceBones;
+
+        if (canInstance)
         {
-            BindTexture(gpuTextureIndex);
-            const bool gpuBlendMesh = blendMeshIndex <= -2 || m->Texture == blendMeshIndex;
-            if (gpuBlendMesh)
-            {
-                if ((renderFlags & RENDER_DARK) != 0) EnableAlphaBlendMinus();
-                else EnableAlphaBlend();
-            }
-            else if ((renderFlags & RENDER_BRIGHT) != 0)
-                EnableAlphaBlend();
-            else if ((renderFlags & RENDER_DARK) != 0)
-                EnableAlphaBlendMinus();
-            else if ((renderFlags & RENDER_LIGHTMAP) != 0)
-                EnableLightMap();
-            else if (gpuTexture->Components == 4)
-                EnableAlphaTest();
-            else
-                DisableAlphaBlend();
-            if (gpuUntexturedBright)
-                DisableDepthMask();
-            if ((renderFlags & RENDER_NODEPTH) != 0)
-                DisableDepthTest();
-            renderer.SetTexture2D(!gpuUntexturedBright);
-            if (!gpuUntexturedBright)
-                renderer.BindTexture(gpuTexture->TextureNumber);
-            const float blendLight = gpuBlendMesh ? blendMeshAlpha : 1.f;
-            const float color[4] = { BodyLight[0] * blendLight, BodyLight[1] * blendLight, BodyLight[2] * blendLight, alpha };
-            if (renderer.DrawStaticMesh(m->GpuMeshHandle, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
-                GpuBodyScale, gpuMaterialEffect == 0 && LightEnable && !gpuBlendMesh, GpuLightPosition, GpuPostTranslation,
-                (renderFlags & RENDER_WAVE) != 0, static_cast<float>(WorldTime), gpuMaterialEffect,
-                (renderFlags & RENDER_SHADOWMAP) != 0, BodyOrigin, BoneScale))
-                return;
+            if (g_instanceBatchOpen && !(g_instanceKey == key))
+                FlushInstanceBatch();
+            g_instanceKey = key;
+            g_instanceBatchOpen = true;
+
+            Platform::StaticMeshInstance instance;
+            instance.color[0] = BodyLight[0] * blendLight;
+            instance.color[1] = BodyLight[1] * blendLight;
+            instance.color[2] = BodyLight[2] * blendLight;
+            instance.color[3] = alpha;
+            VectorCopy(GpuPostTranslation, instance.postTranslation);
+            instance.bodyScale = GpuBodyScale;
+            VectorCopy(GpuLightPosition, instance.lightPosition);
+            instance.lighting = gpuLighting;
+            VectorCopy(BodyOrigin, instance.bodyOrigin);
+            instance.boneScale = BoneScale;
+            instance.materialEffect = gpuMaterialEffect;
+            instance.wave = (renderFlags & RENDER_WAVE) != 0;
+            instance.shadowMap = (renderFlags & RENDER_SHADOWMAP) != 0;
+            instance.boneCount = static_cast<size_t>(GpuBoneMatrixCount);
+            instance.boneMatrices = NULL;  // preenchido no flush, a partir da copia
+
+            const size_t paletteFloats = static_cast<size_t>(GpuBoneMatrixCount) * 12;
+            const size_t base = g_instancePalettes.size();
+            g_instancePalettes.resize(base + paletteFloats);
+            memcpy(&g_instancePalettes[base], &GpuBoneMatrices[0][0][0], paletteFloats * sizeof(float));
+            g_instances.push_back(instance);
+            return;
         }
+
+        FlushInstanceBatch();
+        ApplyInstanceBatchState(key);
+        const float color[4] = { BodyLight[0] * blendLight, BodyLight[1] * blendLight, BodyLight[2] * blendLight, alpha };
+        if (renderer.DrawStaticMesh(m->GpuMeshHandle, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
+            GpuBodyScale, gpuLighting, GpuLightPosition, GpuPostTranslation,
+            (renderFlags & RENDER_WAVE) != 0, static_cast<float>(WorldTime), gpuMaterialEffect,
+            (renderFlags & RENDER_SHADOWMAP) != 0, BodyOrigin, BoneScale))
+            return;
     }
     if (Platform::IsGlslLegacyBackendEnabled() && Platform::ShouldUseGpuSkinningForModel(modelId) &&
         GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0)
@@ -1505,7 +1687,7 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         && texture != NULL
         && texture->Components == 3;
     if (!queueOpaqueWorldMesh)
-        Platform::FlushOpaqueWorldRenderQueue();
+        FlushOpaqueWorldQueueForImmediateDraw(renderFlags, alpha, m);
 
     bool EnableWave = false;
     int streamMesh = static_cast<u_char>(this->StreamMesh);
@@ -1978,7 +2160,7 @@ void BMD::RenderMeshAlternative(int iRndExtFlag, int iParam, int i, int RenderFl
         && pBitmap != NULL
         && pBitmap->Components == 3;
     if (!queueOpaqueAlternativeMesh)
-        Platform::FlushOpaqueWorldRenderQueue();
+        FlushOpaqueWorldQueueForImmediateDraw(RenderFlag, Alpha, m);
 
     bool EnableWave = false;
     int streamMesh = StreamMesh;
@@ -2725,7 +2907,7 @@ void BMD::RenderMeshTranslate(int i, int RenderFlag, float Alpha, int BlendMesh,
         Platform::SubmitOpaqueWorldRenderCommand(command, &queueVertices[0], queueVertices.size());
         return;
     }
-    Platform::FlushOpaqueWorldRenderQueue();
+    FlushOpaqueWorldQueueForImmediateDraw(RenderFlag, Alpha, m);
 
     bool EnableWave = false;
     int streamMesh = StreamMesh;

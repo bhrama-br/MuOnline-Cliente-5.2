@@ -23,6 +23,37 @@ namespace Platform
         float normalBone;
         float waveSeed;
     };
+    // Estado por instancia de uma malha residente. Tudo que variava por objeto e
+    // era uniforme vira atributo, para que diferencas de wave, efeito de material
+    // ou shadow map nao quebrem o lote.
+    struct StaticMeshInstance
+    {
+        StaticMeshInstance()
+            : bodyScale(1.f), lighting(false), boneScale(1.f), materialEffect(0),
+              wave(false), shadowMap(false), boneMatrices(NULL), boneCount(0)
+        {
+            color[0] = color[1] = color[2] = color[3] = 1.f;
+            postTranslation[0] = postTranslation[1] = postTranslation[2] = 0.f;
+            lightPosition[0] = lightPosition[1] = lightPosition[2] = 0.f;
+            bodyOrigin[0] = bodyOrigin[1] = bodyOrigin[2] = 0.f;
+        }
+
+        float color[4];
+        float postTranslation[3];
+        float bodyScale;
+        float lightPosition[3];
+        bool lighting;
+        float bodyOrigin[3];
+        float boneScale;
+        int materialEffect;
+        bool wave;
+        bool shadowMap;
+        // boneCount * 12 floats em ordem de linha, igual ao BMD. NULL desliga o
+        // skinning para esta instancia.
+        const float* boneMatrices;
+        size_t boneCount;
+    };
+
     // Contadores do caminho legado moderno desde o ultimo Reset. O ciclo de frame
     // (e a apresentacao do overlay/CSV) pode ser conectado sem expor detalhes GL
     // aos chamadores do renderer.
@@ -222,6 +253,13 @@ namespace Platform
             bool wave = false, float worldTime = 0.f, int materialEffect = 0,
             bool shadowMap = false, const float* bodyOrigin = NULL, float boneScale = 1.f)
         { (void)handle; (void)color; (void)modelMatrix; (void)boneMatrices; (void)boneCount; (void)bodyScale; (void)lighting; (void)lightPosition; (void)postTranslation; (void)wave; (void)worldTime; (void)materialEffect; (void)shadowMap; (void)bodyOrigin; (void)boneScale; return false; }
+        // Desenha N instancias da mesma malha residente numa chamada. Devolve
+        // false quando o backend nao suporta instancing ou a paleta nao cabe; o
+        // chamador entao emite instancia por instancia por DrawStaticMesh.
+        virtual bool DrawStaticMeshInstanced(unsigned int handle, const StaticMeshInstance* instances, size_t count)
+        { (void)handle; (void)instances; (void)count; return false; }
+        // 0 quando nao ha caminho instanciado disponivel.
+        virtual size_t GetMaxInstanceBoneCount() const { return 0; }
         virtual void ReleaseStaticMesh(unsigned int handle) { (void)handle; }
         virtual void RecordCpuSkinningWork(unsigned long long vertices, unsigned long long normals)
         { (void)vertices; (void)normals; }

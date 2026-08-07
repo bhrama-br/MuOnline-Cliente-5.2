@@ -84,6 +84,18 @@ namespace
         PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer;
         PFNGLGETSHADERINFOLOGPROC GetShaderInfoLog;
         PFNGLGETPROGRAMINFOLOGPROC GetProgramInfoLog;
+        // Instancing. Ambas sao core em GL 3.3 e em GLES 3.0/WebGL 2, mas ficam
+        // fora da checagem obrigatoria: se faltarem, o adapter apenas nao oferece
+        // o caminho instanciado, em vez de desistir de desenhar.
+        PFNGLVERTEXATTRIBDIVISORPROC VertexAttribDivisor;
+        PFNGLDRAWELEMENTSINSTANCEDPROC DrawElementsInstanced;
+        PFNGLDISABLEVERTEXATTRIBARRAYPROC DisableVertexAttribArray;
+
+        bool HasInstancing() const
+        {
+            return VertexAttribDivisor != NULL && DrawElementsInstanced != NULL &&
+                DisableVertexAttribArray != NULL;
+        }
 
         // Nome da primeira funcao que nao pode ser resolvida, para diagnostico.
         const char* MissingName() const
@@ -116,6 +128,7 @@ namespace
             LOAD_GL(UniformMatrix4fv); LOAD_GL(UseProgram); LOAD_GL(VertexAttribPointer);
             LOAD_GL(Uniform1i); LOAD_GL(Uniform1f); LOAD_GL(Uniform3f); LOAD_GL(UniformBlockBinding);
             LOAD_GL(GetShaderInfoLog); LOAD_GL(GetProgramInfoLog);
+            LOAD_GL(VertexAttribDivisor); LOAD_GL(DrawElementsInstanced); LOAD_GL(DisableVertexAttribArray);
 #undef LOAD_GL
             return AttachShader != NULL && ActiveTexture != NULL && BindBuffer != NULL && BindBufferBase != NULL && BindVertexArray != NULL && BufferData != NULL && BufferSubData != NULL &&
                 CompileShader != NULL && CreateProgram != NULL && CreateShader != NULL && DeleteBuffers != NULL &&
@@ -159,6 +172,9 @@ namespace
 #define glUniformBlockBinding g_ModernGl.UniformBlockBinding
 #define glUseProgram g_ModernGl.UseProgram
 #define glVertexAttribPointer g_ModernGl.VertexAttribPointer
+#define glVertexAttribDivisor g_ModernGl.VertexAttribDivisor
+#define glDrawElementsInstanced g_ModernGl.DrawElementsInstanced
+#define glDisableVertexAttribArray g_ModernGl.DisableVertexAttribArray
 
     struct LegacyVertex
     {
@@ -191,6 +207,20 @@ namespace
         "layout(location=4) in float aPositionBone;\n"
         "layout(location=5) in float aNormalBone;\n"
         "layout(location=6) in float aWaveSeed;\n"
+        // Atributos por instancia (divisor 1). Sao lidos apenas quando
+        // uInstanced != 0; no caminho de instancia unica os uniformes valem.
+        "layout(location=7) in vec4 iColor;\n"
+        "layout(location=8) in vec4 iPostTransScale;\n"
+        "layout(location=9) in vec4 iLightPosLighting;\n"
+        "layout(location=10) in vec4 iBodyOriginBoneScale;\n"
+        // x = linha da paleta, y = materialEffect, z = bits (1 wave, 2 shadowMap,
+        // 4 skinning), w = reservado.
+        "layout(location=11) in vec4 iParams;\n"
+        "uniform int uInstanced;\n"
+        // Paleta de ossos das instancias: RGBA32F, 3 texels por osso, uma linha
+        // por instancia. Textura em vez de UBO porque o limite de 64 KB da UBO
+        // daria ~6 instancias, e nem SSBO nem samplerBuffer existem no WebGL 2.
+        "uniform sampler2D uBonePalette;\n"
         "uniform mat4 uProjection; uniform mat4 uModel;\n"
         "uniform vec3 uDrawColor;\n"
         "uniform int uSkinning;\n"
@@ -206,32 +236,57 @@ namespace
         "out vec4 vColor;\n"
         "out vec2 vTexCoord;\n"
         "out float vEyeDistance;\n"
+        // Uma linha da paleta da instancia corrente. texelFetch nao exige
+        // filtragem, entao RGBA32F amostravel basta (core em GLES 3.0).
+        "vec4 InstanceBoneRow(int row) {\n"
+        "  return texelFetch(uBonePalette, ivec2(row, int(iParams.x + 0.5)), 0);\n"
+        "}\n"
         "void main() {\n"
+        "  bool instanced = uInstanced != 0;\n"
+        "  int instanceBits = instanced ? int(iParams.z + 0.5) : 0;\n"
+        "  bool skinning = instanced ? ((instanceBits & 4) != 0) : (uSkinning != 0);\n"
+        "  float boneScale = instanced ? iBodyOriginBoneScale.w : uBoneScale;\n"
+        "  float bodyScale = instanced ? iPostTransScale.w : uBodyScale;\n"
+        "  vec3 postTranslation = instanced ? iPostTransScale.xyz : uPostTranslation;\n"
+        "  vec3 bodyOrigin = instanced ? iBodyOriginBoneScale.xyz : uBodyOrigin;\n"
+        "  bool wave = instanced ? ((instanceBits & 1) != 0) : (uWave != 0);\n"
+        "  bool shadowMap = instanced ? ((instanceBits & 2) != 0) : (uShadowMap != 0);\n"
+        "  int materialEffect = instanced ? int(iParams.y + 0.5) : uMaterialEffect;\n"
+        "  bool lighting = instanced ? (iLightPosLighting.w != 0.0) : (uLighting != 0);\n"
+        "  vec3 lightPosition = instanced ? iLightPosLighting.xyz : uLightPosition;\n"
+        "  vec3 drawColor = instanced ? iColor.rgb : uDrawColor;\n"
         "  vec4 localPosition; vec3 localNormal;\n"
-        "  if (uSkinning != 0) {\n"
+        "  if (skinning) {\n"
         "    int row = int(aPositionBone + 0.5) * 3;\n"
         "    vec4 p = vec4(aPosition, 1.0);\n"
-        "    localPosition = vec4(dot(uBoneRows[row], p), dot(uBoneRows[row + 1], p), dot(uBoneRows[row + 2], p), 1.0);\n"
-        "    if (uBoneScale != 1.0) localPosition.xyz = vec3(dot(uBoneRows[row].xyz, aPosition) * uBoneScale + uBoneRows[row].w, dot(uBoneRows[row+1].xyz, aPosition) * uBoneScale + uBoneRows[row+1].w, dot(uBoneRows[row+2].xyz, aPosition) * uBoneScale + uBoneRows[row+2].w);\n"
+        "    vec4 r0 = instanced ? InstanceBoneRow(row) : uBoneRows[row];\n"
+        "    vec4 r1 = instanced ? InstanceBoneRow(row + 1) : uBoneRows[row + 1];\n"
+        "    vec4 r2 = instanced ? InstanceBoneRow(row + 2) : uBoneRows[row + 2];\n"
+        "    localPosition = vec4(dot(r0, p), dot(r1, p), dot(r2, p), 1.0);\n"
+        "    if (boneScale != 1.0) localPosition.xyz = vec3(dot(r0.xyz, aPosition) * boneScale + r0.w, dot(r1.xyz, aPosition) * boneScale + r1.w, dot(r2.xyz, aPosition) * boneScale + r2.w);\n"
         "    int normalRow = int(aNormalBone + 0.5) * 3; vec4 n = vec4(aNormal, 0.0);\n"
-        "    localNormal = vec3(dot(uBoneRows[normalRow], n), dot(uBoneRows[normalRow + 1], n), dot(uBoneRows[normalRow + 2], n));\n"
+        "    vec4 n0 = instanced ? InstanceBoneRow(normalRow) : uBoneRows[normalRow];\n"
+        "    vec4 n1 = instanced ? InstanceBoneRow(normalRow + 1) : uBoneRows[normalRow + 1];\n"
+        "    vec4 n2 = instanced ? InstanceBoneRow(normalRow + 2) : uBoneRows[normalRow + 2];\n"
+        "    localNormal = vec3(dot(n0, n), dot(n1, n), dot(n2, n));\n"
         "  } else { localPosition = uModel * vec4(aPosition, 1.0); localNormal = aNormal; }\n"
-        "  localPosition.xyz *= uBodyScale;\n"
-        "  localPosition.xyz += uPostTranslation;\n"
-        "  if (uWave != 0) localPosition.xyz += localNormal * (sin((floor(uWorldTime) + aWaveSeed * 931.0) * 0.007) * 28.0);\n"
-        "  if (uShadowMap != 0) { vec3 p = localPosition.xyz - uBodyOrigin; p.x += p.z * (p.x + 2000.0) / (p.z - 4000.0); p.z = 5.0; localPosition.xyz = p + uBodyOrigin; }\n"
+        "  localPosition.xyz *= bodyScale;\n"
+        "  localPosition.xyz += postTranslation;\n"
+        "  if (wave) localPosition.xyz += localNormal * (sin((floor(uWorldTime) + aWaveSeed * 931.0) * 0.007) * 28.0);\n"
+        "  if (shadowMap) { vec3 p = localPosition.xyz - bodyOrigin; p.x += p.z * (p.x + 2000.0) / (p.z - 4000.0); p.z = 5.0; localPosition.xyz = p + bodyOrigin; }\n"
         "  vec4 eye = uModelView * localPosition;\n"
         "  gl_Position = uProjection * eye;\n"
-        "  float luminosity = (uLighting != 0) ? max(dot(localNormal, uLightPosition) * 0.8 + 0.4, 0.2) : 1.0;\n"
+        "  float luminosity = lighting ? max(dot(localNormal, lightPosition) * 0.8 + 0.4, 0.2) : 1.0;\n"
         // glColor do pipeline fixo satura *depois* de combinar a cor do corpo
         // com a iluminacao por normal. Fazer isso no shader preserva o resultado
         // do cliente para BodyLight e luminosity acima de 1.0.
-        "  vColor = clamp(aColor * vec4(uDrawColor * luminosity, 1.0), 0.0, 1.0); vTexCoord = aTexCoord;\n"
-        "  float wave = floor(uWorldTime) * 0.0001;\n"
-        "  if (uMaterialEffect == 1) vTexCoord = vec2(localNormal.z * 0.5 + wave, localNormal.y * 0.5 + wave * 2.0);\n"
-        "  else if (uMaterialEffect == 2) { float w2 = mod(floor(uWorldTime), 5000.0) * 0.00024 - 0.4; vTexCoord = vec2((localNormal.z + localNormal.x) * 0.8 + w2 * 2.0, (localNormal.y + localNormal.x) + w2 * 3.0); }\n"
-        "  else if (uMaterialEffect == 3) vTexCoord = vec2(localNormal.z * 0.5 + 0.2, localNormal.y * 0.5 + 0.5);\n"
-        "  else if (uMaterialEffect == 4) vTexCoord = vec2(localNormal.x * aTexCoord.x, localNormal.y * aTexCoord.y);\n"
+        "  float alpha = instanced ? iColor.a : 1.0;\n"
+        "  vColor = clamp(aColor * vec4(drawColor * luminosity, alpha), 0.0, 1.0); vTexCoord = aTexCoord;\n"
+        "  float waveTime = floor(uWorldTime) * 0.0001;\n"
+        "  if (materialEffect == 1) vTexCoord = vec2(localNormal.z * 0.5 + waveTime, localNormal.y * 0.5 + waveTime * 2.0);\n"
+        "  else if (materialEffect == 2) { float w2 = mod(floor(uWorldTime), 5000.0) * 0.00024 - 0.4; vTexCoord = vec2((localNormal.z + localNormal.x) * 0.8 + w2 * 2.0, (localNormal.y + localNormal.x) + w2 * 3.0); }\n"
+        "  else if (materialEffect == 3) vTexCoord = vec2(localNormal.z * 0.5 + 0.2, localNormal.y * 0.5 + 0.5);\n"
+        "  else if (materialEffect == 4) vTexCoord = vec2(localNormal.x * aTexCoord.x, localNormal.y * aTexCoord.y);\n"
         // Distancia no espaco de visao, base do fog linear.
         "  vEyeDistance = length(eye.xyz);\n"
         "}\n";
@@ -273,7 +328,9 @@ namespace
               m_fogLocation(-1), m_fogColorLocation(-1), m_fogStartLocation(-1), m_fogEndLocation(-1),
               m_fogEnabled(false), m_fogStart(0.f), m_fogEnd(1.f),
               m_alphaTestEnabled(false), m_texture2DEnabled(false), m_depthTestEnabled(false), m_texture(0), m_batching(false), m_failed(false), m_logged(false),
-              m_resourceGeneration(1)
+              m_resourceGeneration(1), m_bonePaletteTexture(0), m_instanceBuffer(0),
+              m_instancedLocation(-1), m_bonePaletteLocation(-1), m_instancedEnviado(-1),
+              m_instancingUnavailable(false)
         {
 			// Capacidade inicial para os lotes comuns de UI/mundo. clear() preserva
 			// essa memoria entre frames, evitando realocacoes no aquecimento.
@@ -329,6 +386,7 @@ namespace
             m_bodyOriginEnviada[0] = m_bodyOriginEnviada[1] = m_bodyOriginEnviada[2] = -1e30f;
             m_boneScaleEnviado = -1e30f;
             m_texturaUnidadeEnviada = false;
+            m_instancedEnviado = -1;
         }
 
         // Setters com espelho. Devolvem sem tocar no GL quando o valor ja esta la;
@@ -810,6 +868,11 @@ namespace
             m_boneBlockIndex = GL_INVALID_INDEX;
             m_textureLocation = -1;
             m_useTextureLocation = -1;
+            m_instancedLocation = -1;
+            m_bonePaletteLocation = -1;
+            m_bonePaletteTexture = 0;
+            m_instanceBuffer = 0;
+            m_instancingUnavailable = false;
             m_depthTestEnabled = false;
             m_texture = 0;
             m_failed = false;
@@ -826,6 +889,62 @@ namespace
         virtual bool IsStaticMeshResident(unsigned int handle) const
         {
             return ResolveStaticMesh(handle) != NULL;
+        }
+
+        // Estado de passe, comum ao desenho de uma malha e ao instanciado: nao
+        // varia por instancia e por isso permanece uniforme.
+        void SetupSharedStaticMeshUniforms()
+        {
+            if (!m_programaAtivo)
+            {
+                glUseProgram(m_program);
+                m_programaAtivo = true;
+                ++m_frameStats.programChanges;
+            }
+            // A unidade de textura e constante durante toda a vida do programa.
+            if (!m_texturaUnidadeEnviada || !CacheDeUniformesAtivo())
+            {
+                glUniform1i(m_textureLocation, 0);
+                m_texturaUnidadeEnviada = true;
+            }
+            EnviarUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0, m_usarTexturaEnviado);
+            EnviarUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0, m_alphaTestEnviado);
+            EnviarUniform1f(m_alphaRefLocation, m_alphaTestReference, m_alphaRefEnviado);
+            EnviarUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0, m_fogEnviado);
+            EnviarUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2], m_fogColorEnviada);
+            EnviarUniform1f(m_fogStartLocation, m_fogStart, m_fogStartEnviado);
+            EnviarUniform1f(m_fogEndLocation, m_fogEnd, m_fogEndEnviado);
+            EnviarUniformMatriz4(m_projectionLocation, m_projection, m_projEnviada, m_matrizProjEnviada);
+            EnviarUniformMatriz4(m_modelViewLocation, m_modelView, m_mvEnviada, m_matrizMvEnviada);
+        }
+
+        // Textura de paleta e VBO de instancias, criados sob demanda. Uma falha
+        // aqui desliga o caminho instanciado de vez, sem derrubar o resto.
+        bool EnsureInstancingResources()
+        {
+            if (m_instancingUnavailable) return false;
+            if (m_bonePaletteTexture != 0 && m_instanceBuffer != 0) return true;
+            if (m_bonePaletteTexture == 0)
+            {
+                glGenTextures(1, &m_bonePaletteTexture);
+                if (m_bonePaletteTexture == 0) { m_instancingUnavailable = true; return false; }
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
+                // texelFetch nao filtra, mas GL exige filtro completo para a
+                // textura ser considerada valida.
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glActiveTexture(GL_TEXTURE0);
+                m_texturaEnviadaConhecida = false;
+            }
+            if (m_instanceBuffer == 0)
+            {
+                glGenBuffers(1, &m_instanceBuffer);
+                if (m_instanceBuffer == 0) { m_instancingUnavailable = true; return false; }
+            }
+            return true;
         }
 
         virtual unsigned int UploadStaticMesh(const Platform::StaticMeshVertex* vertices, size_t vertexCount,
@@ -900,27 +1019,8 @@ namespace
             FlushPendingBatch();
             ++m_frameStats.staticMeshCacheHits;
             const StaticMesh& mesh = *resolved;
-            if (!m_programaAtivo)
-            {
-                glUseProgram(m_program);
-                m_programaAtivo = true;
-                ++m_frameStats.programChanges;
-            }
-            // A unidade de textura e constante durante toda a vida do programa.
-            if (!m_texturaUnidadeEnviada || !CacheDeUniformesAtivo())
-            {
-                glUniform1i(m_textureLocation, 0);
-                m_texturaUnidadeEnviada = true;
-            }
-            EnviarUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0, m_usarTexturaEnviado);
-            EnviarUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0, m_alphaTestEnviado);
-            EnviarUniform1f(m_alphaRefLocation, m_alphaTestReference, m_alphaRefEnviado);
-            EnviarUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0, m_fogEnviado);
-            EnviarUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2], m_fogColorEnviada);
-            EnviarUniform1f(m_fogStartLocation, m_fogStart, m_fogStartEnviado);
-            EnviarUniform1f(m_fogEndLocation, m_fogEnd, m_fogEndEnviado);
-            EnviarUniformMatriz4(m_projectionLocation, m_projection, m_projEnviada, m_matrizProjEnviada);
-            EnviarUniformMatriz4(m_modelViewLocation, m_modelView, m_mvEnviada, m_matrizMvEnviada);
+            SetupSharedStaticMeshUniforms();
+            EnviarUniform1i(m_instancedLocation, 0, m_instancedEnviado);
             const float model[16] = {
                 modelMatrix[0], modelMatrix[4], modelMatrix[8], 0.f,
                 modelMatrix[1], modelMatrix[5], modelMatrix[9], 0.f,
@@ -1001,6 +1101,118 @@ namespace
             }
             else
                 InvalidarCacheDeEstado();
+            return true;
+        }
+
+        virtual size_t GetMaxInstanceBoneCount() const
+        {
+            return (g_ModernGl.HasInstancing() && !m_instancingUnavailable) ? kMaxInstanceBones : 0;
+        }
+
+        virtual bool DrawStaticMeshInstanced(unsigned int handle, const Platform::StaticMeshInstance* instances, size_t count)
+        {
+            if (instances == NULL || count == 0) return false;
+            if (!g_ModernGl.HasInstancing() || m_instancingUnavailable) return false;
+            const StaticMesh* resolved = ResolveStaticMesh(handle);
+            if (resolved == NULL || !EnsureResources() || !EnsureInstancingResources()) return false;
+
+            // Uma unica instancia nao paga o upload da paleta em textura nem o do
+            // buffer de instancias: o caminho normal sai na frente.
+            if (count == 1) return false;
+
+            size_t boneCount = instances[0].boneCount;
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (instances[i].boneCount != boneCount || instances[i].boneMatrices == NULL)
+                    return false;
+            }
+            if (boneCount == 0 || boneCount > kMaxInstanceBones) return false;
+
+            FlushPendingBatch();
+            const StaticMesh& mesh = *resolved;
+
+            // Paleta: 3 texels por osso na horizontal, uma instancia por linha.
+            const size_t rowTexels = boneCount * 3;
+            m_instancePalette.assign(rowTexels * count * 4, 0.f);
+            for (size_t i = 0; i < count; ++i)
+                memcpy(&m_instancePalette[i * rowTexels * 4], instances[i].boneMatrices, boneCount * 12 * sizeof(float));
+
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, static_cast<GLsizei>(rowTexels),
+                static_cast<GLsizei>(count), 0, GL_RGBA, GL_FLOAT, &m_instancePalette[0]);
+            m_frameStats.bonePaletteUploadBytes += static_cast<unsigned long long>(m_instancePalette.size() * sizeof(float));
+
+            // Atributos por instancia, no mesmo layout declarado no shader.
+            m_instanceAttributes.resize(count * kInstanceFloats);
+            for (size_t i = 0; i < count; ++i)
+            {
+                const Platform::StaticMeshInstance& source = instances[i];
+                float* out = &m_instanceAttributes[i * kInstanceFloats];
+                out[0] = source.color[0]; out[1] = source.color[1]; out[2] = source.color[2]; out[3] = source.color[3];
+                out[4] = source.postTranslation[0]; out[5] = source.postTranslation[1]; out[6] = source.postTranslation[2];
+                out[7] = source.bodyScale;
+                out[8] = source.lightPosition[0]; out[9] = source.lightPosition[1]; out[10] = source.lightPosition[2];
+                out[11] = source.lighting ? 1.f : 0.f;
+                out[12] = source.bodyOrigin[0]; out[13] = source.bodyOrigin[1]; out[14] = source.bodyOrigin[2];
+                out[15] = source.boneScale;
+                out[16] = static_cast<float>(i);
+                out[17] = static_cast<float>(source.materialEffect);
+                out[18] = static_cast<float>((source.wave ? 1 : 0) | (source.shadowMap ? 2 : 0) | 4);
+                out[19] = 0.f;
+            }
+
+            glBindVertexArray(mesh.vertexArray);
+            glBindBuffer(GL_ARRAY_BUFFER, m_instanceBuffer);
+            const GLsizeiptr instanceBytes = static_cast<GLsizeiptr>(m_instanceAttributes.size() * sizeof(float));
+            // Orphaning: nao esperar a GPU terminar de ler o lote anterior.
+            glBufferData(GL_ARRAY_BUFFER, instanceBytes, NULL, GL_STREAM_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, instanceBytes, &m_instanceAttributes[0]);
+            ++m_frameStats.bufferDataCalls;
+            ++m_frameStats.bufferSubDataCalls;
+            const GLsizei stride = static_cast<GLsizei>(kInstanceFloats * sizeof(float));
+            for (int slot = 0; slot < 5; ++slot)
+            {
+                const GLuint location = static_cast<GLuint>(7 + slot);
+                glEnableVertexAttribArray(location);
+                glVertexAttribPointer(location, 4, GL_FLOAT, GL_FALSE, stride,
+                    reinterpret_cast<const void*>(static_cast<uintptr_t>(slot * 4 * sizeof(float))));
+                glVertexAttribDivisor(location, 1);
+            }
+
+            SetupSharedStaticMeshUniforms();
+            EnviarUniform1i(m_instancedLocation, 1, m_instancedEnviado);
+            if (m_bonePaletteLocation >= 0)
+                glUniform1i(m_bonePaletteLocation, 1);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_texture);
+            m_texturaEnviada = m_texture;
+            m_texturaEnviadaConhecida = true;
+
+            glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(mesh.indexCount), mesh.indexType,
+                NULL, static_cast<GLsizei>(count));
+
+            // Os atributos de instancia vivem no VAO da malha. Deixa-los ligados
+            // faria o proximo DrawStaticMesh nao instanciado ler lixo do buffer
+            // de instancias, entao sao desligados aqui.
+            for (int slot = 0; slot < 5; ++slot)
+            {
+                const GLuint location = static_cast<GLuint>(7 + slot);
+                glVertexAttribDivisor(location, 0);
+                glDisableVertexAttribArray(location);
+            }
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            ++m_frameStats.drawCalls;
+            ++m_frameStats.instancedDrawCalls;
+            ++m_frameStats.instanceBatchesFlushed;
+            m_frameStats.instancesSubmitted += static_cast<unsigned long long>(count);
+            if (static_cast<unsigned long long>(count) > m_frameStats.largestInstanceBatch)
+                m_frameStats.largestInstanceBatch = static_cast<unsigned long long>(count);
+            m_frameStats.staticMeshIndices += static_cast<unsigned long long>(mesh.indexCount) * count;
+            m_frameStats.vertices += static_cast<unsigned long long>(mesh.indexCount) * count;
+            m_vaoAtivo = false;
             return true;
         }
 
@@ -1267,6 +1479,8 @@ namespace
             m_shadowMapLocation = glGetUniformLocation(m_program, "uShadowMap");
             m_bodyOriginLocation = glGetUniformLocation(m_program, "uBodyOrigin");
             m_boneScaleLocation = glGetUniformLocation(m_program, "uBoneScale");
+            m_instancedLocation = glGetUniformLocation(m_program, "uInstanced");
+            m_bonePaletteLocation = glGetUniformLocation(m_program, "uBonePalette");
             m_boneBlockIndex = glGetUniformBlockIndex(m_program, "BmdBones");
             if (m_boneBlockIndex != GL_INVALID_INDEX)
                 glUniformBlockBinding(m_program, m_boneBlockIndex, 0);
@@ -1397,6 +1611,19 @@ namespace
         std::vector<StaticMesh> m_staticMeshes;
         std::vector<size_t> m_staticMeshFreeList;
         unsigned int m_resourceGeneration;
+
+        // Instancing. kMaxInstanceBones espelha o limite do bloco de ossos do
+        // caminho nao instanciado, para que a decisao de elegibilidade do cliente
+        // sirva aos dois. kInstanceFloats sao 5 vec4 por instancia.
+        enum { kMaxInstanceBones = 200, kInstanceFloats = 20 };
+        GLuint m_bonePaletteTexture;
+        GLuint m_instanceBuffer;
+        std::vector<float> m_instancePalette;
+        std::vector<float> m_instanceAttributes;
+        GLint m_instancedLocation;
+        GLint m_bonePaletteLocation;
+        int m_instancedEnviado;
+        bool m_instancingUnavailable;
     };
 }
 

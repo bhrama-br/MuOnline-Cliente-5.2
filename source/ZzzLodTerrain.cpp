@@ -1358,7 +1358,15 @@ void RenderFace(int Texture,int mx,int my)
 		SubmitOpaqueTerrainFace(Texture);
 		return;
 	}
-	Platform::FlushOpaqueWorldRenderQueue();
+	// Todo caminho abaixo termina em EnableAlphaTest() ou DisableAlphaBlend():
+	// a camada base do terreno nunca liga blend. Alpha-test escreve profundidade
+	// e nao mistura, entao esta emissao e independente de ordem em relacao aos
+	// opacos ainda enfileirados, e a fila pode continuar acumulando.
+	//
+	// Esta era a maior fonte de fragmentacao da fila: um tile fora do predicado
+	// esvaziava todos os tiles acumulados ate ali.
+	if (!Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching))
+		Platform::FlushOpaqueWorldRenderQueue();
 	if(gMapManager.WorldActive == WD_39KANTURU_3RD)
 	{
 		if(Texture == 3)

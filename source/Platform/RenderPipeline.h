@@ -145,4 +145,12 @@ namespace Platform
     // pronta para continuar recebendo opacos no mesmo frame.
     void FlushOpaqueWorldRenderQueue();
     void ExecuteOpaqueWorldRenderQueue();
+
+    // O coletor de instancias vive em ZzzBMD.cpp, junto dos helpers de estado
+    // legado que ele precisa reaplicar. Registrar o flush aqui garante que ele
+    // respeite exatamente as mesmas barreiras da fila de opacos, em vez de manter
+    // uma segunda lista de pontos de descarga que sairia de sincronia.
+    typedef void (*InstanceBatchFlushFn)();
+    void SetInstanceBatchFlushCallback(InstanceBatchFlushFn callback);
+    void FlushInstanceBatches();
 }

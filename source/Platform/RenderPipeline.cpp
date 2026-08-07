@@ -7,6 +7,7 @@ namespace
     static Platform::RenderQueue g_opaqueWorldQueue;
     static Platform::OpenGL33RenderBackend g_opaqueWorldBackend;
     static bool g_opaqueWorldQueueActive = false;
+    static Platform::InstanceBatchFlushFn g_instanceBatchFlush = NULL;
 
     static bool IsOpaqueBefore(const Platform::RenderCommand& left, const Platform::RenderCommand& right)
     {
@@ -219,8 +220,23 @@ void Platform::SubmitOpaqueWorldRenderCommand(const RenderCommand& command, cons
         g_opaqueWorldQueue.Submit(command, vertices, vertexCount);
 }
 
+void Platform::SetInstanceBatchFlushCallback(InstanceBatchFlushFn callback)
+{
+    g_instanceBatchFlush = callback;
+}
+
+void Platform::FlushInstanceBatches()
+{
+    if (g_instanceBatchFlush != NULL)
+        g_instanceBatchFlush();
+}
+
 void Platform::FlushOpaqueWorldRenderQueue()
 {
+    // As instancias saem antes: elas sao opacas e desenham direto, enquanto a
+    // fila reordena. Descarregar o coletor primeiro mantem a ordem de emissao
+    // entre os dois caminhos igual a do codigo sem instancing.
+    FlushInstanceBatches();
     if (!g_opaqueWorldQueueActive)
         return;
     g_opaqueWorldQueue.Execute(g_opaqueWorldBackend);
@@ -229,6 +245,7 @@ void Platform::FlushOpaqueWorldRenderQueue()
 
 void Platform::ExecuteOpaqueWorldRenderQueue()
 {
+    FlushInstanceBatches();
     if (!g_opaqueWorldQueueActive)
         return;
     FlushOpaqueWorldRenderQueue();
