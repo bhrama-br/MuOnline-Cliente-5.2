@@ -193,6 +193,12 @@ repartição do frame em microssegundos: `us_terrain`, `us_objects`,
 `us_characters`, `us_effects`, `us_sprites`, `us_simulation`, `us_select`,
 `us_setup`, `us_misc` e `us_unmeasured`.
 
+**Compare sempre por `frame_total_us` e `fps`**, medidos de topo a topo de
+`RenderScene` (cobrem `SwapBuffers` e o limitador). `cpu_us` mede só a região
+instrumentada, e `gpu_us` **não é confiável**: `GL_TIME_ELAPSED` inclui o tempo
+ocioso, e na prática ele reproduz `frame_total_us` em vez de medir carga de GPU.
+A coluna fica no arquivo como registro do problema, não como métrica.
+
 Comece por essas colunas antes de otimizar qualquer coisa. Ver
 `RENDER_INSTANCING_CACHE_BATCHING_PLAN.md` para o histórico de medições —
 inclusive as otimizações que os contadores confirmaram e que **não** moveram o

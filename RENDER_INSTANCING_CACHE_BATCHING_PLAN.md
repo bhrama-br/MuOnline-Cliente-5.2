@@ -8,6 +8,40 @@ e **WebGL 2 / GLES 3** com o mesmo código — isso elimina SSBO, `GL_TEXTURE_BU
 
 ---
 
+## 0.0 CORREÇÃO IMPORTANTE — o instrumento de GPU estava quebrado
+
+**`gpu_us` não media carga de GPU. Media o período do frame.**
+
+| mundo | fps | frame_total_us | gpu_us | cpu_us | CPU / frame |
+| --- | --- | --- | --- | --- | --- |
+| 0 Lorencia | 172 | 6.083 | 6.074 | 5.041 | 83% |
+| 3 | 149 | 7.121 | 7.101 | 4.150 | 58% |
+| 4 Noria | 178 | 5.716 | 5.701 | 4.790 | 84% |
+| 94 | 131 | 7.986 | 7.936 | 7.299 | 91% |
+
+`gpu_us ≈ frame_total_us` em todas as linhas. `GL_TIME_ELAPSED` mede o tempo
+decorrido na timeline da GPU entre as duas queries — **ocioso incluso** —, e as
+queries envolviam o frame inteiro. Ele estava apenas remedindo o frame.
+
+**Fica retratado tudo que foi concluído a partir dele**, em particular:
+
+- ~~"o frame é limitado pela GPU"~~ — não há evidência disso.
+- ~~"o piso é 6.597 µs de GPU"~~ — esse número era o período do frame.
+- ~~"não é fill rate"~~ — a sonda comparou dois valores de `gpu_us`, que não
+  mediam pixels. O teste de fill rate precisa ser refeito contra `frame_total_us`.
+
+### O que os dados válidos dizem
+
+- **O jogo roda a 130-178 FPS. Não há teto ativo** — o limitador não está atuando.
+- **A região de CPU medida é 58-91% do período do frame.** Ela é o termo dominante,
+  não um detalhe.
+- Portanto os ganhos de CPU **se traduzem em frame**, e as sete rodadas de "ganho
+  zero" precisam ser relidas: elas foram comparadas entre capturas com cena e
+  câmera diferentes, e contra um `gpu_us` que não media nada.
+
+**A métrica correta para qualquer comparação daqui em diante é `frame_total_us`
+e `fps`, não `cpu_us` e nunca `gpu_us`.**
+
 ## 0. Placar final
 
 | entrega | contador | tempo de frame | estado |
