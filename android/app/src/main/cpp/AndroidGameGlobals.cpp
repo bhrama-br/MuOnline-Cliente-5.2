@@ -43,15 +43,15 @@ void CErrorReport::HexWrite(void* pBuffer, int iSize)
     const unsigned char* bytes = (const unsigned char*)pBuffer;
     for (int i = 0; i < iSize; i += 16)
     {
-        char linha[128];
-        int posicao = 0;
+        char line[128];
+        int position = 0;
         for (int j = i; j < i + 16 && j < iSize; ++j)
         {
-            posicao += snprintf(linha + posicao, sizeof(linha) - posicao, "%02X", bytes[j]);
+            position += snprintf(line + position, sizeof(line) - position, "%02X", bytes[j]);
             if ((j % 4) == 3 && j < iSize - 1)
-                posicao += snprintf(linha + posicao, sizeof(linha) - posicao, " ");
+                position += snprintf(line + position, sizeof(line) - position, " ");
         }
-        __android_log_print(ANDROID_LOG_ERROR, "MuLegacy", "%s", linha);
+        __android_log_print(ANDROID_LOG_ERROR, "MuLegacy", "%s", line);
     }
 }
 

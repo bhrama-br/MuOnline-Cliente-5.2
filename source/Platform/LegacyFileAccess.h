@@ -37,7 +37,7 @@ namespace Platform
     // arquivo falta, e no Android isso encerra o processo de verdade (no Web o
     // build linka -lnoexit e a chamada e inofensiva). Sem registrar o caminho, a
     // saida nao diz QUAL arquivo a causou.
-    const char* UltimoCaminhoAberto();
+    const char* LastOpenedPath();
 
     // Observador de FALHA de abertura.
     //

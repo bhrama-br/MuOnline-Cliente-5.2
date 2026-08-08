@@ -39,9 +39,9 @@ void DOSConsole::Write(bool WriteToFile, const char* Format, ...)
 	// Fora do Windows nao ha console alocado: a saida vai para stderr, que o
 	// navegador mostra no console da pagina e o Android encaminha ao logcat.
 	// Mesmo formato de horario, para o log continuar comparavel com o do PC.
-	time_t agora = time(NULL);
+	time_t now = time(NULL);
 	struct tm local;
-	localtime_r(&agora, &local);
+	localtime_r(&now, &local);
 	fprintf(stderr, "(%02d:%02d:%02d) %s\n",
 	        local.tm_hour, local.tm_min, local.tm_sec, Message);
 #endif

@@ -56,15 +56,15 @@ void CErrorReport::HexWrite(void* pBuffer, int iSize)
     // Mesmo formato do original: 16 bytes por linha, grupos de 4.
     for (int i = 0; i < iSize; i += 16)
     {
-        char linha[128];
-        int posicao = 0;
+        char line[128];
+        int position = 0;
         for (int j = i; j < i + 16 && j < iSize; ++j)
         {
-            posicao += snprintf(linha + posicao, sizeof(linha) - posicao, "%02X", bytes[j]);
+            position += snprintf(line + position, sizeof(line) - position, "%02X", bytes[j]);
             if ((j % 4) == 3 && j < iSize - 1)
-                posicao += snprintf(linha + posicao, sizeof(linha) - posicao, " ");
+                position += snprintf(line + position, sizeof(line) - position, " ");
         }
-        fprintf(stderr, "%s\n", linha);
+        fprintf(stderr, "%s\n", line);
     }
 }
 
@@ -77,9 +77,9 @@ void CErrorReport::AddSeparator(void) { fputs("\n", stderr); }
 // padrao e dao o mesmo resultado nas tres plataformas.
 void CErrorReport::WriteCurrentTime(BOOL bLineShift)
 {
-    time_t agora = time(NULL);
+    time_t now = time(NULL);
     struct tm local;
-    localtime_r(&agora, &local);
+    localtime_r(&now, &local);
     fprintf(stderr, "%04d-%02d-%02d %02d:%02d:%02d%s",
             local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
             local.tm_hour, local.tm_min, local.tm_sec,

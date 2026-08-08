@@ -76,12 +76,12 @@ public:
 
 		DWORD dwTick = GetTickCount();
 		msg << dwTick;
-		WORD teste1 = 1;
-		WORD teste2 = 2;
-		msg << teste1;
-		msg << teste2;
+		WORD test1 = 1;
+		WORD test2 = 2;
+		msg << test1;
+		msg << test2;
 
-		std::cout << "[" << dwTick << "]" << "[" << teste1 << "]" << "[" << teste2 << "]Send data.\n";
+		std::cout << "[" << dwTick << "]" << "[" << test1 << "]" << "[" << test2 << "]Send data.\n";
 
 		//// Caution with this...
 		//std::chrono::system_clock::time_point timeNow = std::chrono::system_clock::now();

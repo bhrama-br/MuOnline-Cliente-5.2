@@ -175,9 +175,21 @@ escala com a área de pixel?
 .\Main.exe -renderstatscsv -renderscale=50    # 1/4 dos pixels
 ```
 
-Se `gpu_us` cair perto de 4× entre os dois, o custo de GPU é **fill rate** —
-overdraw, shading, textura. Se quase não mudar, é **vértice/draw call**, e o
-caminho é outro.
+Leia o resultado em **`us_present` e `frame_total_us`**, nesta ordem:
+
+| observação | conclusão |
+| --- | --- |
+| `us_present` cai muito (perto de 4×) | o custo de GPU é **fill rate** — overdraw, shading, textura |
+| `us_present` quase não muda, mas é alto | GPU limitada por **vértice/draw call**, não por pixel |
+| `us_present` já era baixo nos dois | o frame **não** espera a GPU; olhe as colunas de `cpu_us` |
+| `frame_total_us` não muda e `us_present` também não | o gargalo não é GPU nenhuma — pare de procurar aqui |
+
+**Não use `gpu_us` nesta comparação.** A versão anterior deste README mandava
+compará-lo, e isso estava errado: `GL_TIME_ELAPSED` mede o intervalo na timeline
+da GPU incluindo o ocioso, e na prática reproduz `frame_total_us`. A sonda de fill
+rate original comparou dois valores de `gpu_us` e por isso sua conclusão foi
+retratada (commit `e3cb8b7`). `us_present` mede o bloqueio real em `SwapBuffers` e
+existe desde a v15 — é a coluna que essa pergunta sempre precisou.
 
 A cena passa a ocupar um canto da janela e o clique sai do lugar. É esperado:
 `OpenglWindowWidth/Height` mantêm o valor real de propósito, para que projeção e
@@ -185,21 +197,114 @@ frustum não mudem e só a contagem de pixels varie. **Não é recurso, é
 instrumento** — a coluna `render_scale` no CSV registra o valor para que uma
 captura a 50% não pareça um ganho mágico.
 
+### Rastros da Twisting Slash
+
+`-wheeltrail=N` limita quantos rastros da skill Wheel podem existir ao mesmo
+tempo. **Ausente = ilimitado**, o comportamento histórico.
+
+Cada rastro (`MODEL_SKILL_WHEEL2`) **não é um sprite**: `RenderWheelWeapon`
+(`ZzzEffect.cpp:18009`) desenha uma cópia completa do modelo da arma do jogador,
+com `b->Animation`, `RequestTerrainLight` e `RenderPartObject` com alpha — por
+rastro, por frame. Um rastro vive ~1 segundo (`LifeTime = 25`, decaindo a 25/s) e
+a skill gera ~5 por golpe, então o uso contínuo sustenta dezenas de modelos de
+arma animados simultâneos.
+
+As colunas `wheel_trails_avg` / `wheel_trails_max` medem quantos existem, e
+`wheel_trail_cap` registra o limite usado — uma captura limitada não pode parecer
+ganho mágico, mesma regra do `render_scale`.
+
+```
+.\Main.exe -renderstatscsv                  # baseline, sem limite
+.\Main.exe -renderstatscsv -wheeltrail=4    # com limite, para comparar
+```
+
+Compare por `fps_min` e `frame_total_us_max`, não pela média: o sintoma é um
+mergulho transitório e a média de 120 frames o dilui.
+
+### Teto de FPS e vsync
+
+| flag | efeito |
+| --- | --- |
+| `-fpslimit=N` | teto de N FPS (10..1000). Ausente = ilimitado. Até a v14 o teto **nunca funcionava**: `SetTargetFps` sobrescrevia o próprio argumento, então `WaitForNextActivity()` era código morto. Vale para máquina que aquece: rodar a 170 FPS derruba o FPS *sustentado* por throttling. O sleep resultante aparece em **`us_limiter`**, não em `us_frame_gap` — espera deliberada não pode parecer trabalho não instrumentado. Valor fora da faixa vai para o log de erro. |
+| `-vsync=on\|off` | swap interval explícito. **Ausente não chama nada** — fica no default do driver, o mesmo regime de todas as capturas anteriores. A coluna `vsync` do CSV registra o valor efetivo (`-1` default do driver, `0` off, `1` on). |
+
+Sem `-vsync`, um vsync forçado no painel do driver trava o FPS em 60 e **esconde
+qualquer otimização**. Registre em que regime a captura foi feita.
+
 ### Medição
 
-`-renderstatscsv` grava `RenderPerformance_v9.csv` a cada 120 frames, após 180 de
-aquecimento. Além dos contadores de draw/vértice/upload, o arquivo traz a
-repartição do frame em microssegundos: `us_terrain`, `us_objects`,
-`us_characters`, `us_effects`, `us_sprites`, `us_simulation`, `us_select`,
-`us_setup`, `us_misc` e `us_unmeasured`.
+`-renderstatscsv` grava `RenderPerformance_v16.csv` a cada 120 frames, após 180 de
+aquecimento. Além dos contadores de draw/vértice/upload, o arquivo reparte o frame
+inteiro em microssegundos, em duas camadas que fecham por construção:
 
-**Compare sempre por `frame_total_us` e `fps`**, medidos de topo a topo de
-`RenderScene` (cobrem `SwapBuffers` e o limitador). `cpu_us` mede só a região
-instrumentada, e `gpu_us` **não é confiável**: `GL_TIME_ELAPSED` inclui o tempo
-ocioso, e na prática ele reproduz `frame_total_us` em vez de medir carga de GPU.
-A coluna fica no arquivo como registro do problema, não como métrica.
+```
+cpu_us         = us_terrain + us_objects + us_characters + us_effects + us_sprites
+               + us_simulation + us_select + us_setup_gl + us_frustum + us_misc
+               + us_water + us_ui + us_framebegin + us_unmeasured
+frame_total_us = cpu_us + us_overlay + us_present + us_protocol + us_pump
+               + us_limiter + us_frame_gap
+```
+
+Se o arquivo já existir com um header **diferente**, ele é renomeado para
+`RenderPerformance_v16.oldN.csv` antes da escrita. Se a rotação falhar (o caso
+comum é o arquivo estar aberto no Excel), a amostra é **descartada** em vez de
+anexada: perder 120 frames custa uma re-execução, gravar linha de outra largura
+custa o arquivo inteiro e produz número que parece válido. Foi assim que a
+geração v15 se corrompeu.
+
+As três cenas (`MAIN_SCENE`, `CHARACTER_SCENE`, `LOG_IN_SCENE`) usam as **mesmas**
+fases, então são comparáveis coluna a coluna entre si. Antes da v15 as duas
+últimas não tinham nenhuma instrumentação: o `cpu_us` delas era integralmente
+`us_unmeasured` — 87% na seleção de personagem, que é o pior caso de CPU medido
+(7,3 ms para 58 draw calls).
+
+Há uma **terceira** família de colunas, de detalhe. Elas **aninham dentro de** uma
+coluna da primeira família e somam exatamente ela:
+
+```
+us_char_pose + us_char_shadow + us_char_parts              == us_characters
+us_sim_ui + us_sim_objects + us_sim_chars
+          + us_sim_effects + us_sim_rest                   == us_simulation
+```
+
+São sobreposição, não partição — **não** as inclua em nenhuma soma do frame, ou o
+mesmo tempo é contado duas vezes. `us_char_parts` e `us_sim_rest` são derivadas
+por subtração.
+
+Elas existem porque `us_characters` (33,7% do frame em Lorencia) e `us_simulation`
+(15,2%, e o maior bloco de todos em world 3) eram as duas maiores fatias medidas e
+nenhuma tinha detalhamento. As perguntas que respondem: no caso de personagens, se
+o custo está no corpo/pose ou nas ~15 malhas de equipamento que um player carrega;
+no caso da simulação, se está nos objetos do mundo, nos personagens, ou no update
+de UI — que roda a cada frame mesmo a 170 FPS.
+
+As quatro colunas da camada externa (`us_overlay`, `us_present`, `us_protocol`,
+`us_pump`, `us_limiter`) medem o que acontece **depois** da leitura de `cpu_us`: o overlay de
+debug, `SwapBuffers`, o protocolo e o pump de mensagens do laço principal. Elas
+chegam com **um frame de atraso** — são acumuladas após a escrita do CSV e
+transferidas no topo do frame seguinte. Numa média de 120 frames isso não muda
+nada, mas não compare uma linha dessas contra um frame específico.
+
+`us_present` é o número que diz se o frame espera a GPU. Antes da v15 esse custo
+não aparecia em nenhuma coluna: ficava no gap entre `cpu_us` e `frame_total_us`,
+que a v14 mediu entre 0,4 e 4,1 ms.
+
+`us_water` só é diferente de zero em mapa com água — ele mede o **segundo passe
+completo** (terreno de água, joints, efeitos, blurs e todos os sprites outra vez).
+Não compare um mapa com água contra um sem olhando só o total.
+
+**Compare sempre por `frame_total_us` e `fps_period`.** A coluna `fps` é média
+aritmética de `1/dt` instantâneo e **superestima** o FPS real em até 11% nas
+amostras rápidas — ela fica só para comparação com as capturas antigas.
+`fps_period` é `1e6 / média(frame_total_us)`, que é o FPS de verdade.
+`cpu_us` mede só a região instrumentada, e `gpu_us` **não é confiável**:
+`GL_TIME_ELAPSED` inclui o tempo ocioso, e na prática ele reproduz
+`frame_total_us` em vez de medir carga de GPU. A coluna fica no arquivo como
+registro do problema, não como métrica.
 
 Comece por essas colunas antes de otimizar qualquer coisa. Ver
+`FPS_DIAGNOSTICO_E_PLANO.md` para a leitura da captura v14 — a repartição real do
+frame, o que ela derrubou, e como interpretar cada coluna nova da v15. Ver
 `RENDER_INSTANCING_CACHE_BATCHING_PLAN.md` para o histórico de medições —
 inclusive as otimizações que os contadores confirmaram e que **não** moveram o
 tempo de frame.

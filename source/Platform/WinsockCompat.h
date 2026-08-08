@@ -102,7 +102,7 @@ inline bool LegacySendWouldBlock(int erro)
 typedef struct linger LINGER;
 
 #ifndef CopyMemory
-#define CopyMemory(destino, origem, tamanho) memcpy((destino), (origem), (tamanho))
+#define CopyMemory(destination, source, size) memcpy((destination), (source), (size))
 #endif
 
 // WSAStartup/WSACleanup inicializam a DLL do Winsock. No POSIX nao ha nada para
@@ -122,13 +122,13 @@ typedef struct
 #define MAKEWORD(a, b) ((unsigned short)(((unsigned char)(a)) | (((unsigned short)((unsigned char)(b))) << 8)))
 #endif
 
-inline int WSAStartup(unsigned short versao, WSADATA* dados)
+inline int WSAStartup(unsigned short versao, WSADATA* data)
 {
-    if (dados != 0)
+    if (data != 0)
     {
-        memset(dados, 0, sizeof(*dados));
-        dados->wVersion = versao;
-        dados->wHighVersion = versao;
+        memset(data, 0, sizeof(*data));
+        data->wVersion = versao;
+        data->wHighVersion = versao;
     }
     return 0;
 }

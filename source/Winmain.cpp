@@ -983,6 +983,32 @@ bool CreateOpenglWindow()
 	g_hRC = static_cast<HGLRC>(Platform::GetRenderContext().GetNativeRenderContext());
 	g_ErrorReport.Write("OpenGL renderer: %s\r\n", config.enableShaderBackend ? "GLSL legacy adapter" : "fixed-function comparison fallback");
 
+	// -vsync=on|off. Ausente NAO chama nada: o swap interval fica no default do
+	// driver, que e exatamente o comportamento de todas as capturas anteriores.
+	// Trocar o default silenciosamente invalidaria a comparacao com elas. A flag
+	// existe porque um vsync forcado no painel trava o FPS em 60 e esconde
+	// qualquer otimizacao — sem ela nao ha como saber em que regime a medicao foi
+	// feita. O valor efetivo vai para a coluna `vsync` do CSV.
+	{
+		const char* vsyncArgument = ::strstr(::GetCommandLineA(), "-vsync=");
+		if (vsyncArgument != NULL)
+		{
+			typedef BOOL (WINAPI *SwapIntervalProc)(int);
+			const SwapIntervalProc swapInterval =
+				reinterpret_cast<SwapIntervalProc>(::wglGetProcAddress("wglSwapIntervalEXT"));
+			if (swapInterval != NULL)
+			{
+				const int requested = (::strstr(vsyncArgument, "-vsync=on") != NULL) ? 1 : 0;
+				if (swapInterval(requested))
+					g_vsyncInterval = requested;
+				else
+					g_ErrorReport.Write("wglSwapIntervalEXT(%d) failed - ErrorCode : %d\r\n", requested, GetLastError());
+			}
+			else
+				g_ErrorReport.Write("wglSwapIntervalEXT unavailable; swap interval left at driver default\r\n");
+		}
+	}
+
 	ShowWindow(g_hWnd,SW_SHOW);
 	SetForegroundWindow(g_hWnd);
 	SetFocus(g_hWnd);
@@ -1722,7 +1748,26 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
 		default: FontHeight = 16; break;
 	}
 	
-	SetTargetFps(-1); // unlimited
+	// -fpslimit=N aplica um teto de N FPS; ausente mantem ilimitado, que e o
+	// comportamento medido em todas as capturas anteriores. O teto so passou a
+	// funcionar depois da correcao em SetTargetFps — ele era descartado antes.
+	{
+		double targetFps = -1.0; // unlimited
+		const char* limitArgument = ::strstr(::GetCommandLineA(), "-fpslimit=");
+		if (limitArgument != NULL)
+		{
+			const int requested = atoi(limitArgument + strlen("-fpslimit="));
+			if (requested >= 10 && requested <= 1000)
+				targetFps = static_cast<double>(requested);
+			else
+				// Um `-fpslimit=6O` (letra O) vira 6 no atoi e cai fora da faixa. Sem
+				// este aviso a captura sai SEM teto e o unico sinal e a coluna
+				// fps_limit valendo -1 -- facil de nao ver justamente na rodada cujo
+				// proposito era comparar com e sem teto.
+				g_ErrorReport.Write("-fpslimit=%d fora da faixa 10..1000; sem teto de FPS\r\n", requested);
+		}
+		SetTargetFps(targetFps);
+	}
 
 	FontHeight = static_cast<int>(std::ceil(12 + ((WindowHeight - 480) / 200.f)));
 	
@@ -1889,7 +1934,14 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
 
 	while (1)
 	{
-		if (Platform::GetWindow().PumpEvents())
+		// O pump e o protocolo estao dentro de frame_total_us (medido topo a topo de
+		// RenderScene) mas fora de cpu_us. A v14 deixou 0,4 a 4,1 ms nesse gap sem
+		// instrumento, e em world 3 era ele que crescia enquanto cpu_us ficava
+		// parado. Medido aqui para fechar a conta.
+		const long long pumpStartUs = FrameLoopNowMicroseconds();
+		const bool pumpedMessage = Platform::GetWindow().PumpEvents();
+		RecordFramePumpUs(FrameLoopNowMicroseconds() - pumpStartUs);
+		if (pumpedMessage)
 		{
 			if (Platform::GetWindow().QuitRequested())
 				break;
@@ -1933,12 +1985,22 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
 			}
 			else
 			{
-				if (!Platform::GetWindow().PumpEvents())
+				const long long idlePumpStartUs = FrameLoopNowMicroseconds();
+				const bool idlePumped = Platform::GetWindow().PumpEvents();
+				RecordFramePumpUs(FrameLoopNowMicroseconds() - idlePumpStartUs);
+				if (!idlePumped)
 				{
+					// Com -fpslimit=N este caminho volta a ser alcancavel: e o sleep
+					// do limitador. Sem limite ele so faz yield. Medido em coluna
+					// propria porque espera deliberada nao pode parecer trabalho nao
+					// instrumentado em us_frame_gap.
+					const long long limiterStartUs = FrameLoopNowMicroseconds();
 					WaitForNextActivity(precise == TIMERR_NOERROR);
+					RecordFrameLimiterUs(FrameLoopNowMicroseconds() - limiterStartUs);
 				}
 			}
 		}
+		const long long protocolStartUs = FrameLoopNowMicroseconds();
 	#ifdef NEW_PROTOCOL_SYSTEM
 		if(SceneFlag < CHARACTER_SCENE)
 			ProtocolCompiler();
@@ -1949,6 +2011,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
 		ProtocolCompiler();
 		g_pChatRoomSocketList->ProtocolCompile();
 	#endif
+		RecordFrameProtocolUs(FrameLoopNowMicroseconds() - protocolStartUs);
 
 		
     } // while( 1 )

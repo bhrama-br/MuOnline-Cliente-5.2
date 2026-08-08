@@ -51,9 +51,9 @@ extern CUITextInputBox* g_pSinglePasswdInputBox;
 namespace
 {
     Platform::LegacySceneLogger g_logger = 0;
-    bool g_tituloPronto = false;
-    int  g_larguraAtual = 0;
-    int  g_alturaAtual  = 0;
+    bool g_titleReady = false;
+    int  g_currentWidth = 0;
+    int  g_currentHeight  = 0;
 
     void Log(const char* mensagem)
     {
@@ -63,12 +63,12 @@ namespace
     void Logf(const char* formato, ...)
     {
         if (g_logger == 0) return;
-        char linha[320];
+        char line[320];
         va_list args;
         va_start(args, formato);
-        vsnprintf(linha, sizeof(linha), formato, args);
+        vsnprintf(line, sizeof(line), formato, args);
         va_end(args);
-        g_logger(linha);
+        g_logger(line);
     }
 
     // Traduz o ponteiro da plataforma para os globais de mouse do cliente.
@@ -87,24 +87,24 @@ namespace
     // As contas e as bordas de pressionar/soltar sao as mesmas do window proc,
     // inclusive a divisao dos DOIS eixos por g_fScreenRate_y (nao _x), que e como o
     // original faz.
-    void AtualizarMouseLegado()
+    void UpdateLegacyMouse()
     {
-        Platform::PointerSnapshot ponteiro;
-        Platform::GetInputBackend().ReadPointer(ponteiro);
+        Platform::PointerSnapshot pointer;
+        Platform::GetInputBackend().ReadPointer(pointer);
 
-        const int anteriorX = MouseX;
-        const int anteriorY = MouseY;
+        const int previousX = MouseX;
+        const int previousY = MouseY;
 
         // WM_MOUSEMOVE (Winmain.cpp:778-793).
         const float taxa = (g_fScreenRate_y != 0.0f) ? g_fScreenRate_y : 1.0f;
-        const int limiteX = (int)(WindowWidth / taxa);
-        const int limiteY = (int)GetWindowsY;
-        int x = (int)((float)ponteiro.x / taxa);
-        int y = (int)((float)ponteiro.y / taxa);
+        const int limitX = (int)(WindowWidth / taxa);
+        const int limitY = (int)GetWindowsY;
+        int x = (int)((float)pointer.x / taxa);
+        int y = (int)((float)pointer.y / taxa);
         if (x < 0) x = 0;
-        if (x > limiteX) x = limiteX;
+        if (x > limitX) x = limitX;
         if (y < 0) y = 0;
-        if (y > limiteY) y = limiteY;
+        if (y > limitY) y = limitY;
         MouseX = x;
         MouseY = y;
 
@@ -116,15 +116,15 @@ namespace
 
         // Bordas dos botoes. O window proc as deriva de mensagens; aqui saem da
         // comparacao com o estado do quadro anterior, que e o mesmo resultado.
-        const bool esquerdoAgora = ponteiro.leftButtonDown;
-        if (esquerdoAgora && !MouseLButton)          // WM_LBUTTONDOWN
+        const bool leftNow = pointer.leftButtonDown;
+        if (leftNow && !MouseLButton)          // WM_LBUTTONDOWN
         {
             g_iNoMouseTime = 0;
             MouseLButtonPop = false;
             MouseLButtonPush = true;
             MouseLButton = true;
         }
-        else if (!esquerdoAgora && MouseLButton)     // WM_LBUTTONUP
+        else if (!leftNow && MouseLButton)     // WM_LBUTTONUP
         {
             g_iNoMouseTime = 0;
             MouseLButtonPush = false;
@@ -134,15 +134,15 @@ namespace
             g_iMousePopPosition_y = MouseY;
         }
 
-        const bool direitoAgora = ponteiro.rightButtonDown;
-        if (direitoAgora && !MouseRButton)           // WM_RBUTTONDOWN
+        const bool rightNow = pointer.rightButtonDown;
+        if (rightNow && !MouseRButton)           // WM_RBUTTONDOWN
         {
             g_iNoMouseTime = 0;
             MouseRButtonPop = false;
             MouseRButtonPush = true;
             MouseRButton = true;
         }
-        else if (!direitoAgora && MouseRButton)      // WM_RBUTTONUP
+        else if (!rightNow && MouseRButton)      // WM_RBUTTONUP
         {
             g_iNoMouseTime = 0;
             MouseRButtonPush = false;
@@ -150,8 +150,8 @@ namespace
             MouseRButton = false;
         }
 
-        (void)anteriorX;
-        (void)anteriorY;
+        (void)previousX;
+        (void)previousY;
     }
 
     // Publica a resolucao nos globais do cliente e refaz o que depende dela.
@@ -160,10 +160,10 @@ namespace
     // ficam com o tamanho PADRAO da area de desenho -- e BeginBitmap chama
     // glViewport(0,0,WindowWidth,WindowHeight), entao a interface inteira sai
     // espremida num retangulo no canto.
-    void AplicarResolucao(int largura, int altura)
+    void AplicarResolucao(int width, int height)
     {
-        WindowWidth  = (unsigned int)largura;
-        WindowHeight = (unsigned int)altura;
+        WindowWidth  = (unsigned int)width;
+        WindowHeight = (unsigned int)height;
 
         // m_Resolution e o INDICE na tabela de resolucoes do Winmain (1209-1220), e
         // varios pontos decidem por ele -- nao e um dado morto:
@@ -180,7 +180,7 @@ namespace
         // Em 4:3 o defeito nao aparecia porque a tabela e consistente: 640 vezes a
         // taxa da altura da exatamente a largura cheia (800x600 -> 640*1.25 = 800).
         // So em widescreen as duas contas divergem.
-        static const struct { int largura, altura; } kResolucoes[] = {
+        static const struct { int width, height; } kResolucoes[] = {
             { 640, 480}, { 800, 600}, {1024, 768}, {1280, 960},   // 0..3: 4:3
             {1360, 768}, {1440, 900}, {1600, 900}, {1680,1050},   // 4..8: widescreen
             {1920,1080}
@@ -191,14 +191,14 @@ namespace
         // e o que decide se o cliente esta no caminho widescreen, e e o que estava
         // errado. Alturas nao listadas (720, 1080 em 2424 de largura) sao normais
         // aqui, ao contrario do PC, onde o usuario escolhe da lista.
-        const float proporcao = (float)largura / (float)(altura > 0 ? altura : 1);
+        const float proporcao = (float)width / (float)(height > 0 ? height : 1);
         int melhor = 0;
         float melhorErro = 1e9f;
         for (int i = 0; i < kTotalResolucoes; ++i)
         {
-            const float proporcaoI = (float)kResolucoes[i].largura / (float)kResolucoes[i].altura;
+            const float proporcaoI = (float)kResolucoes[i].width / (float)kResolucoes[i].height;
             const float erro = fabsf(proporcaoI - proporcao) * 1000.0f
-                             + fabsf((float)(kResolucoes[i].altura - altura));
+                             + fabsf((float)(kResolucoes[i].height - height));
             if (erro < melhorErro) { melhorErro = erro; melhor = i; }
         }
         m_Resolution = melhor;
@@ -211,8 +211,8 @@ namespace
         }
         else
         {
-            g_fScreenRate_x = (float)altura / 480.0f;
-            g_fScreenRate_y = (float)altura / 480.0f;
+            g_fScreenRate_x = (float)height / 480.0f;
+            g_fScreenRate_y = (float)height / 480.0f;
         }
         GWidescreen.Init();
 
@@ -220,18 +220,18 @@ namespace
         // gCreateFont.SetFont, que e quem preenche g_hFont e as variantes. Sem
         // isso os handles ficam nulos e NENHUM texto do jogo aparece. Fica aqui,
         // e nao numa inicializacao unica, porque depende da resolucao.
-        const int alturaFonte = (int)ceilf(12.f + ((float)altura - 480.f) / 200.f);
-        const int alturaFixa  = (altura <= 600) ? 14 : 15;
-        gCreateFont.SetFont(alturaFonte - 1, alturaFonte, alturaFixa - 1, alturaFixa);
+        const int fontHeight = (int)ceilf(12.f + ((float)height - 480.f) / 200.f);
+        const int fixedHeight  = (height <= 600) ? 14 : 15;
+        gCreateFont.SetFont(fontHeight - 1, fontHeight, fixedHeight - 1, fixedHeight);
 
         // CreateTitleSceneUI dimensiona os sprites por CInput::GetScreenWidth/
         // Height, e so CInput::Create os define. Ele recusa handle nulo, mas os
         // backends de input de Web e Android ignoram o handle (os eventos vem da
         // superficie), entao um valor nao-nulo qualquer passa pela validacao.
-        CInput::Instance().Create((Platform::NativeWindowHandle)1, largura, altura);
+        CInput::Instance().Create((Platform::NativeWindowHandle)1, width, height);
 
-        g_larguraAtual = largura;
-        g_alturaAtual  = altura;
+        g_currentWidth = width;
+        g_currentHeight  = height;
     }
 
     // As duas caixas de texto COMPARTILHADAS do cliente, criadas em Winmain.cpp
@@ -245,7 +245,7 @@ namespace
     //
     // Fica aqui, depois de gCreateFont.SetFont, porque SetFont recusa handle nulo e
     // sem fonte a caixa nao mede nem desenha texto.
-    void CriarCaixasDeTextoUnicas()
+    void CreateUniqueTextBoxes()
     {
         if (g_pSingleTextInputBox != NULL) return;   // idempotente
 
@@ -274,16 +274,16 @@ namespace Platform
 
     bool CenaDeTituloPronta()
     {
-        return g_tituloPronto;
+        return g_titleReady;
     }
 
-    bool CriarCenaDeTitulo(int larguraTela, int alturaTela)
+    bool CreateTitleScene(int screenWidth, int screenHeight)
     {
         // Mesma lista de WebzenScene, na mesma ordem de slots. O ramo de fundo
         // tem duas variantes escolhidas por rand(); aqui a primeira, para o
         // resultado ser reproduzivel entre execucoes.
-        struct Alvo { const char* arquivo; GLuint wrap; };
-        static const Alvo alvos[] = {
+        struct Target { const char* file; GLuint wrap; };
+        static const Target targets[] = {
             { "Interface\\New_lo_back_01.jpg",     GL_CLAMP_TO_EDGE },
             { "Interface\\New_lo_back_02.jpg",     GL_CLAMP_TO_EDGE },
             { "Interface\\MU_TITLE.tga",           GL_CLAMP_TO_EDGE },
@@ -299,7 +299,7 @@ namespace Platform
             { "Interface\\lo_back_im05.jpg",       GL_CLAMP_TO_EDGE },
             { "Interface\\lo_back_im06.jpg",       GL_CLAMP_TO_EDGE },
         };
-        const int total = (int)(sizeof(alvos) / sizeof(alvos[0]));
+        const int total = (int)(sizeof(targets) / sizeof(targets[0]));
 
         // Vetores globais que o Winmain aloca (GateAttribute, CharactersClient,
         // Hero, g_MapProcess...). Fica AQUI, e nao no ponto de entrada de cada
@@ -313,12 +313,12 @@ namespace Platform
         // que SetFont usa vem de Font.lua, carregado por gCreateFont.Init() aqui.
         InicializarSubsistemasDeScript();
 
-        AplicarResolucao(larguraTela, alturaTela);
+        AplicarResolucao(screenWidth, screenHeight);
 
         // As duas primeiras linhas de WebzenScene. OpenFont carrega as texturas
         // de fonte e cria o renderizador de texto.
         OpenFont();
-        CriarCaixasDeTextoUnicas();
+        CreateUniqueTextBoxes();
         ClearInput();
 
         while (glGetError() != GL_NO_ERROR) {}   // drena erros anteriores
@@ -328,8 +328,8 @@ namespace Platform
         {
             // bCheck=false desliga PopUpErrorCheckMsgBox, que depende da UI que
             // ainda nao existe neste ponto.
-            if (LoadBitmap(alvos[i].arquivo, (GLuint)(BITMAP_TITLE + i),
-                           GL_LINEAR, alvos[i].wrap, false))
+            if (LoadBitmap(targets[i].file, (GLuint)(BITMAP_TITLE + i),
+                           GL_LINEAR, targets[i].wrap, false))
                 ++ok;
         }
         Logf("texturas do titulo: %d de %d (GL 0x%04X)", ok, total, glGetError());
@@ -345,14 +345,14 @@ namespace Platform
         FogEnable = false;
         ::EnableAlphaTest();
 
-        g_tituloPronto = true;
+        g_titleReady = true;
         Log("UI do titulo criada pelo codigo do jogo");
         return true;
     }
 
-    bool CarregarDadosBasicos()
+    bool LoadBasicData()
     {
-        if (!g_tituloPronto) return false;
+        if (!g_titleReady) return false;
 
         while (glGetError() != GL_NO_ERROR) {}
 
@@ -370,7 +370,7 @@ namespace Platform
 
     bool CarregarInterfacePrincipal()
     {
-        if (!g_tituloPronto) return false;
+        if (!g_titleReady) return false;
 
         while (glGetError() != GL_NO_ERROR) {}
 
@@ -381,7 +381,7 @@ namespace Platform
 
     bool EntrarNaCenaDeLogin()
     {
-        if (!g_tituloPronto) return false;
+        if (!g_titleReady) return false;
 
         CUIMng::Instance().ReleaseTitleSceneUI();
         for (int i = 0; i < 14; ++i)
@@ -398,9 +398,9 @@ namespace Platform
         return true;
     }
 
-    void DesenharQuadroLegado(int larguraTela, int alturaTela)
+    void DrawLegacyFrame(int screenWidth, int screenHeight)
     {
-        if (!g_tituloPronto) return;
+        if (!g_titleReady) return;
 
         // Drenar a fila de pacotes, como o laco do Winmain faz (1924).
         //
@@ -423,17 +423,17 @@ namespace Platform
 
         // Antes de qualquer ramo: ver LegacySceneBringup.h sobre por que isto NAO
         // pode viver dentro do ramo de uma cena.
-        if (larguraTela > 0 && alturaTela > 0 &&
-            (larguraTela != g_larguraAtual || alturaTela != g_alturaAtual))
+        if (screenWidth > 0 && screenHeight > 0 &&
+            (screenWidth != g_currentWidth || screenHeight != g_currentHeight))
         {
-            AplicarResolucao(larguraTela, alturaTela);
+            AplicarResolucao(screenWidth, screenHeight);
 
             // A UI de titulo assa a escala nos sprites, entao so ela e remontada,
             // e so enquanto ainda estivermos nela.
             if (SceneFlag == WEBZEN_SCENE)
                 CUIMng::Instance().CreateTitleSceneUI();
 
-            Logf("resolucao %dx%d (rate %.3f)", larguraTela, alturaTela, g_fScreenRate_x);
+            Logf("resolucao %dx%d (rate %.3f)", screenWidth, screenHeight, g_fScreenRate_x);
         }
 
         if (SceneFlag != WEBZEN_SCENE)
@@ -455,7 +455,7 @@ namespace Platform
             // tambem, o lugar da correcao e LegacySceneRunner.cpp.
             // Os globais antigos de mouse ANTES do MainScene: a lista de servidores e
             // o resto da UI legada leem deles no mesmo quadro.
-            AtualizarMouseLegado();
+            UpdateLegacyMouse();
             MainScene(NULL);
 
             // Quem desenha e o proprio jogo. RenderScene chama UpdateSceneState

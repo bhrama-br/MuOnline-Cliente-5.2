@@ -17,7 +17,7 @@ namespace Platform { void InitializeWebAudio(); }
 // que inclui os cabecalhos do cliente.
 namespace Platform
 {
-    bool CreateLegacyTitleScene(int larguraTela, int alturaTela);
+    bool CreateLegacyTitleScene(int screenWidth, int screenHeight);
     bool IsLegacyTitleSceneReady();
     void RenderLegacyTitleScene();
 
@@ -351,10 +351,10 @@ int main()
         // Segunda metade da WebzenScene. Bloqueia a aba enquanto carrega: sao
         // centenas de buscas sincronas. O relatorio depois mostra o custo real,
         // que e o dado que decide se vale pre-buscar em paralelo.
-        const double inicio = emscripten_get_now();
-        Platform::CarregarDadosBasicos();
+        const double start = emscripten_get_now();
+        Platform::LoadBasicData();
         char tempo[120];
-        snprintf(tempo, sizeof(tempo), "OpenBasicData levou %.1f s", (emscripten_get_now() - inicio) / 1000.0);
+        snprintf(tempo, sizeof(tempo), "OpenBasicData levou %.1f s", (emscripten_get_now() - start) / 1000.0);
         ForwardRenderLog(tempo);
         Platform::RelatarBuscaSobDemanda(&ForwardRenderLog);
 

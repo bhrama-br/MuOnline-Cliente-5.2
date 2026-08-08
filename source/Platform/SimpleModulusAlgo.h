@@ -22,7 +22,7 @@ namespace SimpleModulusAlgo
     typedef unsigned short u16;
     typedef unsigned char  u8;
 
-    enum { kBlocoEntrada = 8, kBlocoSaida = 11, kNumChaves = 4 };
+    enum { kInputBlock = 8, kOutputBlock = 11, kKeyCount = 4 };
 
     // Mascara aplicada aos valores gravados no arquivo de chave.
     //
@@ -30,34 +30,34 @@ namespace SimpleModulusAlgo
     // Enc1.dat com as chaves que a lib original produz ao carrega-lo, e depois
     // confirmada em Dec2.dat, que tem chaves completamente diferentes. As 12
     // palavras do arquivo usam a mascara de indice `posicao % 4`.
-    const u32 kMascaraArquivo[kNumChaves] = {
+    const u32 kFileMask[kKeyCount] = {
         0x3F08A79Bu, 0xE25CC287u, 0x93D27AB9u, 0x20DEA7BFu
     };
 
     // Cabecalho do arquivo: id (2 bytes) + tamanho (4 bytes), sem alinhamento.
-    enum { kIdUmaChave = 0x1112, kCabecalhoChave = 6, kBytesChave = 54 };
+    enum { kSingleKeyId = 0x1112, kKeyHeader = 6, kKeyBytes = 54 };
 
     // Le um arquivo de chave ja em memoria. `chave` recebe o bloco do meio, que
     // e a chave de cifragem ou de decifragem conforme o arquivo.
-    inline bool LerChaves(const u8* conteudo, int tamanho,
-                          u32* modulus, u32* chave, u32* chaveXor)
+    inline bool ReadKeys(const u8* conteudo, int size,
+                          u32* modulus, u32* key, u32* keyXor)
     {
-        if (conteudo == 0 || tamanho < kBytesChave) return false;
+        if (conteudo == 0 || size < kKeyBytes) return false;
 
         u16 id;
         memcpy(&id, conteudo, sizeof(id));
-        if (id != kIdUmaChave) return false;
+        if (id != kSingleKeyId) return false;
 
-        const u8* corpo = conteudo + kCabecalhoChave;
-        for (int i = 0; i < kNumChaves * 3; ++i)
+        const u8* corpo = conteudo + kKeyHeader;
+        for (int i = 0; i < kKeyCount * 3; ++i)
         {
             u32 bruto;
             memcpy(&bruto, corpo + i * 4, sizeof(bruto));
-            const u32 valor = bruto ^ kMascaraArquivo[i % kNumChaves];
+            const u32 value = bruto ^ kFileMask[i % kKeyCount];
 
-            if (i < kNumChaves)                 modulus[i] = valor;
-            else if (i < kNumChaves * 2)        chave[i - kNumChaves] = valor;
-            else                                chaveXor[i - kNumChaves * 2] = valor;
+            if (i < kKeyCount)                 modulus[i] = value;
+            else if (i < kKeyCount * 2)        key[i - kKeyCount] = value;
+            else                                keyXor[i - kKeyCount * 2] = value;
         }
         return true;
     }
@@ -93,14 +93,14 @@ namespace SimpleModulusAlgo
     }
 
     // Resto com sinal, como o `and 80000007h` + ajuste da original faz.
-    inline int RestoOito(int valor)
+    inline int RestoOito(int value)
     {
-        return valor % 8;
+        return value % 8;
     }
 
     // Copia nNumBits bits de lpBits (a partir de nInitialBit) para o final de
     // lpBuffer, que ja contem nNumBufferBits bits. Devolve a nova contagem.
-    inline int AdicionarBits(u8* lpBuffer, int nNumBufferBits,
+    inline int AppendBits(u8* lpBuffer, int nNumBufferBits,
                              const u8* lpBits, int nInitialBit, int nNumBits)
     {
         const int byteFinal   = ByteDoBit(nInitialBit + nNumBits - 1);
@@ -118,175 +118,175 @@ namespace SimpleModulusAlgo
         if (sobra != 0)
             temp[nBytes - 1] &= (u8)(0xFF << (8 - sobra));
 
-        const int deslocOrigem  = RestoOito(nInitialBit);
-        const int deslocDestino = RestoOito(nNumBufferBits);
+        const int sourceOffset  = RestoOito(nInitialBit);
+        const int destinationOffset = RestoOito(nNumBufferBits);
 
-        Deslocar(temp, nBytes, -deslocOrigem);
-        Deslocar(temp, nBytes + 1, deslocDestino);
+        Deslocar(temp, nBytes, -sourceOffset);
+        Deslocar(temp, nBytes + 1, destinationOffset);
 
         // Um byte a mais so quando o deslocamento de destino empurrou bits
         // alem do ultimo byte copiado.
-        const int nBytesDestino = nBytes + ((deslocDestino > deslocOrigem) ? 1 : 0);
+        const int destinationByteCount = nBytes + ((destinationOffset > sourceOffset) ? 1 : 0);
 
-        u8* destino = lpBuffer + ByteDoBit(nNumBufferBits);
-        for (int i = 0; i < nBytesDestino; ++i)
-            destino[i] |= temp[i];
+        u8* destination = lpBuffer + ByteDoBit(nNumBufferBits);
+        for (int i = 0; i < destinationByteCount; ++i)
+            destination[i] |= temp[i];
 
         return nNumBufferBits + nNumBits;
     }
 
     // Cifra um bloco de ate 8 bytes em exatamente 11.
-    inline void CifrarBloco(u8* destino, const u8* origem, int nBytesOrigem,
-                            const u32* modulus, const u32* chaveEnc, const u32* chaveXor)
+    inline void CifrarBloco(u8* destination, const u8* source, int sourceByteCount,
+                            const u32* modulus, const u32* keyEnc, const u32* keyXor)
     {
-        memset(destino, 0, kBlocoSaida);
+        memset(destination, 0, kOutputBlock);
 
         // 1) Passo modular, encadeado: cada valor leva os 16 bits baixos do
         //    resto anterior.
-        u32 valores[kNumChaves];
+        u32 values[kKeyCount];
         u32 encadeado = 0;
-        for (int i = 0; i < kNumChaves; ++i)
+        for (int i = 0; i < kKeyCount; ++i)
         {
             u16 palavra;
-            memcpy(&palavra, origem + i * 2, sizeof(palavra));
+            memcpy(&palavra, source + i * 2, sizeof(palavra));
 
-            u32 v = ((u32)palavra ^ chaveXor[i]) ^ encadeado;
-            v = v * chaveEnc[i];
-            valores[i] = v % modulus[i];
-            encadeado = valores[i] & 0xFFFF;
+            u32 v = ((u32)palavra ^ keyXor[i]) ^ encadeado;
+            v = v * keyEnc[i];
+            values[i] = v % modulus[i];
+            encadeado = values[i] & 0xFFFF;
         }
 
         // 2) Passo reverso: de tras para frente, cada valor recebe a chave XOR e
         //    os 16 bits baixos do valor ORIGINAL do vizinho de cima.
-        u32 anterior = valores[kNumChaves - 1] & 0xFFFF;
-        for (int i = kNumChaves - 2; i >= 0; --i)
+        u32 previous = values[kKeyCount - 1] & 0xFFFF;
+        for (int i = kKeyCount - 2; i >= 0; --i)
         {
-            const u32 original = valores[i];
-            valores[i] = original ^ chaveXor[i] ^ anterior;
-            anterior = original & 0xFFFF;
+            const u32 original = values[i];
+            values[i] = original ^ keyXor[i] ^ previous;
+            previous = original & 0xFFFF;
         }
 
         // 3) Empacota 18 bits por valor: os 16 baixos, mais 2 bits vindos do bit
         //    22 (onde o resto da divisao pode alcancar).
         int bits = 0;
-        for (int i = 0; i < kNumChaves; ++i)
+        for (int i = 0; i < kKeyCount; ++i)
         {
-            const u8* pv = (const u8*)&valores[i];
-            bits = AdicionarBits(destino, bits, pv, 0, 16);
-            bits = AdicionarBits(destino, bits, pv, 22, 2);
+            const u8* pv = (const u8*)&values[i];
+            bits = AppendBits(destination, bits, pv, 0, 16);
+            bits = AppendBits(destination, bits, pv, 22, 2);
         }
 
         // 4) Dois bytes de verificacao: soma XOR dos 8 bytes de ENTRADA a partir
         //    de 0xF8, e o tamanho misturado com ela.
         u8 verificacao = 0xF8;
-        for (int i = 0; i < kBlocoEntrada; ++i)
-            verificacao ^= origem[i];
+        for (int i = 0; i < kInputBlock; ++i)
+            verificacao ^= source[i];
 
         u8 par[2];
-        par[0] = (u8)(((u8)nBytesOrigem ^ 0x3D) ^ verificacao);
+        par[0] = (u8)(((u8)sourceByteCount ^ 0x3D) ^ verificacao);
         par[1] = verificacao;
-        AdicionarBits(destino, bits, par, 0, 16);
+        AppendBits(destination, bits, par, 0, 16);
     }
 
     // Decifra um bloco de 11 bytes. Devolve quantos bytes uteis ele carregava
     // (1 a 8), ou -1 se a verificacao falhar.
-    inline int DecifrarBloco(u8* destino, const u8* origem,
-                             const u32* modulus, const u32* chaveDec, const u32* chaveXor)
+    inline int DecifrarBloco(u8* destination, const u8* source,
+                             const u32* modulus, const u32* keyDec, const u32* keyXor)
     {
-        memset(destino, 0, kBlocoEntrada);
+        memset(destination, 0, kInputBlock);
 
         // 1) Desempacota os 4 valores de 18 bits.
-        u32 valores[kNumChaves];
-        memset(valores, 0, sizeof(valores));
+        u32 values[kKeyCount];
+        memset(values, 0, sizeof(values));
         int bits = 0;
-        for (int i = 0; i < kNumChaves; ++i)
+        for (int i = 0; i < kKeyCount; ++i)
         {
-            u8* pv = (u8*)&valores[i];
-            AdicionarBits(pv, 0, origem, bits, 16);
+            u8* pv = (u8*)&values[i];
+            AppendBits(pv, 0, source, bits, 16);
             bits += 16;
-            AdicionarBits(pv, 22, origem, bits, 2);
+            AppendBits(pv, 22, source, bits, 2);
             bits += 2;
         }
 
         // 2) Inverso do passo reverso da cifragem. Aqui o encadeamento leva o
         //    valor JA decifrado, nao o original: e o que desfaz a ida.
-        u32 anterior = valores[kNumChaves - 1] & 0xFFFF;
-        for (int i = kNumChaves - 2; i >= 0; --i)
+        u32 previous = values[kKeyCount - 1] & 0xFFFF;
+        for (int i = kKeyCount - 2; i >= 0; --i)
         {
-            valores[i] = valores[i] ^ chaveXor[i] ^ anterior;
-            anterior = valores[i] & 0xFFFF;
+            values[i] = values[i] ^ keyXor[i] ^ previous;
+            previous = values[i] & 0xFFFF;
         }
 
         // 3) Inverso do passo modular, com a chave de decifragem.
         u32 encadeado = 0;
-        for (int i = 0; i < kNumChaves; ++i)
+        for (int i = 0; i < kKeyCount; ++i)
         {
-            const u32 valor = valores[i];
-            u32 v = (chaveDec[i] * valor) % modulus[i];
-            v = v ^ chaveXor[i] ^ encadeado;
-            encadeado = valor & 0xFFFF;
+            const u32 value = values[i];
+            u32 v = (keyDec[i] * value) % modulus[i];
+            v = v ^ keyXor[i] ^ encadeado;
+            encadeado = value & 0xFFFF;
 
             const u16 palavra = (u16)v;
-            memcpy(destino + i * 2, &palavra, sizeof(palavra));
+            memcpy(destination + i * 2, &palavra, sizeof(palavra));
         }
 
         // 4) Confere: os dois bytes finais guardam a soma de verificacao e o
         //    tamanho. Sem isso um bloco corrompido passaria como dado valido.
         u8 par[2] = { 0, 0 };
-        AdicionarBits(par, 0, origem, bits, 16);
+        AppendBits(par, 0, source, bits, 16);
         const u8 verificacaoGravada = par[1];
-        const u8 tamanho = (u8)((par[1] ^ par[0]) ^ 0x3D);
+        const u8 size = (u8)((par[1] ^ par[0]) ^ 0x3D);
 
         u8 verificacao = 0xF8;
-        for (int i = 0; i < kBlocoEntrada; ++i)
-            verificacao ^= destino[i];
+        for (int i = 0; i < kInputBlock; ++i)
+            verificacao ^= destination[i];
 
         if (verificacaoGravada != verificacao) return -1;
-        return (int)tamanho;
+        return (int)size;
     }
 
     // Devolve o total decifrado, ou -1 se algum bloco falhar na verificacao.
     // Com destino nulo, so calcula o tamanho maximo.
-    inline int Decifrar(u8* destino, const u8* origem, int iSize,
-                        const u32* modulus, const u32* chaveDec, const u32* chaveXor)
+    inline int Decifrar(u8* destination, const u8* source, int iSize,
+                        const u32* modulus, const u32* keyDec, const u32* keyXor)
     {
-        if (destino == 0) return ((iSize + 10) / kBlocoSaida) * kBlocoEntrada;
+        if (destination == 0) return ((iSize + 10) / kOutputBlock) * kInputBlock;
 
         int total = 0;
-        for (int i = 0; i < iSize; i += kBlocoSaida)
+        for (int i = 0; i < iSize; i += kOutputBlock)
         {
-            const int neste = DecifrarBloco(destino, origem, modulus, chaveDec, chaveXor);
+            const int neste = DecifrarBloco(destination, source, modulus, keyDec, keyXor);
             if (neste < 0) return -1;
             total   += neste;
-            destino += kBlocoEntrada;
-            origem  += kBlocoSaida;
+            destination += kInputBlock;
+            source  += kOutputBlock;
         }
         return total;
     }
 
     // Devolve o tamanho cifrado. Com destino nulo, so calcula (a original faz o
     // mesmo, e ha chamador que depende disso para dimensionar buffer).
-    inline int Cifrar(u8* destino, const u8* origem, int iSize,
-                      const u32* modulus, const u32* chaveEnc, const u32* chaveXor)
+    inline int Cifrar(u8* destination, const u8* source, int iSize,
+                      const u32* modulus, const u32* keyEnc, const u32* keyXor)
     {
-        const int total = ((iSize + 7) / 8) * kBlocoSaida;
-        if (destino == 0) return total;
+        const int total = ((iSize + 7) / 8) * kOutputBlock;
+        if (destination == 0) return total;
 
         int restante = iSize;
-        for (int i = 0; i < iSize; i += kBlocoEntrada)
+        for (int i = 0; i < iSize; i += kInputBlock)
         {
-            const int neste = (restante < kBlocoEntrada) ? restante : kBlocoEntrada;
+            const int neste = (restante < kInputBlock) ? restante : kInputBlock;
 
             // A original le os 8 bytes do bloco mesmo quando sobram menos: o
             // checksum percorre os 8. Copiar para um bloco zerado evita ler
             // alem do buffer de origem, que seria leitura invalida.
-            u8 bloco[kBlocoEntrada];
+            u8 bloco[kInputBlock];
             memset(bloco, 0, sizeof(bloco));
-            memcpy(bloco, origem + i, (size_t)neste);
+            memcpy(bloco, source + i, (size_t)neste);
 
-            CifrarBloco(destino, bloco, neste, modulus, chaveEnc, chaveXor);
-            destino  += kBlocoSaida;
-            restante -= kBlocoEntrada;
+            CifrarBloco(destination, bloco, neste, modulus, keyEnc, keyXor);
+            destination  += kOutputBlock;
+            restante -= kInputBlock;
         }
         return total;
     }

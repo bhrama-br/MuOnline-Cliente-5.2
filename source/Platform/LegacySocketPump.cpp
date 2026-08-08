@@ -45,10 +45,10 @@ namespace
             var stream = FS.streams[$0];
             var sock = stream && stream.node && stream.node.sock;
             if (!sock) return -2;
-            var fila = sock.recv_queue ? sock.recv_queue.length : 0;
-            if (fila > 0) return fila;
-            var chave = sock.daddr + ":" + sock.dport;
-            var peer = sock.peers ? sock.peers[chave] : undefined;
+            var queue = sock.recv_queue ? sock.recv_queue.length : 0;
+            if (queue > 0) return queue;
+            var key = sock.daddr + ":" + sock.dport;
+            var peer = sock.peers ? sock.peers[key] : undefined;
             if (!peer || !peer.socket) return -1;
             var estado = peer.socket.readyState;
             if (estado === 2 || estado === 3) return -1;   // CLOSING ou CLOSED
@@ -115,8 +115,8 @@ namespace Platform
         semEspera.tv_sec = 0;
         semEspera.tv_usec = 0;
 
-        const int pronto = select(g_socket + 1, &leitura, &escrita, &excecao, &semEspera);
-        if (pronto <= 0) return;
+        const int ready = select(g_socket + 1, &leitura, &escrita, &excecao, &semEspera);
+        if (ready <= 0) return;
 
         if (FD_ISSET(g_socket, &escrita))
         {

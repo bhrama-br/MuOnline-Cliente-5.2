@@ -57,25 +57,25 @@ extern float BackTerrainHeight[256 * 256];
 // e reemitindo linha a linha.
 static void* MuLegacyLogPump(void*)
 {
-    char linha[512];
+    char line[512];
     ssize_t lidos;
     size_t usado = 0;
-    while ((lidos = read(STDIN_FILENO, linha + usado, sizeof(linha) - usado - 1)) > 0)
+    while ((lidos = read(STDIN_FILENO, line + usado, sizeof(line) - usado - 1)) > 0)
     {
         usado += (size_t)lidos;
-        linha[usado] = '\0';
+        line[usado] = '\0';
 
-        char* inicio = linha;
+        char* start = line;
         char* fim;
-        while ((fim = strchr(inicio, '\n')) != 0)
+        while ((fim = strchr(start, '\n')) != 0)
         {
             *fim = '\0';
-            if (*inicio != '\0')
-                __android_log_print(ANDROID_LOG_INFO, "MuLegacyStdio", "%s", inicio);
-            inicio = fim + 1;
+            if (*start != '\0')
+                __android_log_print(ANDROID_LOG_INFO, "MuLegacyStdio", "%s", start);
+            start = fim + 1;
         }
-        usado = strlen(inicio);
-        memmove(linha, inicio, usado + 1);
+        usado = strlen(start);
+        memmove(line, start, usado + 1);
     }
     return 0;
 }
@@ -274,9 +274,9 @@ namespace
     // `static` locais criados DURANTE a carga registram seus destrutores depois
     // do meu gancho -- entao eles rodam primeiro, e um deles derruba o processo
     // tocando o GL apos o contexto morrer.
-    void RelatarArquivoAusente(const char* caminho)
+    void RelatarArquivoAusente(const char* path)
     {
-        __android_log_print(ANDROID_LOG_WARN, "MuLegacy", "ausente: %s", caminho);
+        __android_log_print(ANDROID_LOG_WARN, "MuLegacy", "ausente: %s", path);
     }
 
     // Atribui consumo de memoria a arquivo.
@@ -340,45 +340,45 @@ namespace
         const char* raiz = getenv("MU_DATA_ROOT");
         if (raiz == NULL || raiz[0] == '\0') return;
 
-        char caminho[1024];
-        snprintf(caminho, sizeof(caminho), "%s/mem-trace.log", raiz);
-        g_rastro = fopen(caminho, "w");
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/mem-trace.log", raiz);
+        g_rastro = fopen(path, "w");
         if (g_rastro == NULL)
         {
             __android_log_print(ANDROID_LOG_ERROR, "MuLegacy",
-                "rastro: nao consegui abrir %s (errno %d)", caminho, errno);
+                "rastro: nao consegui abrir %s (errno %d)", path, errno);
             return;
         }
-        chmod(caminho, 0666);
+        chmod(path, 0666);
         fprintf(g_rastro, "rastro aberto; heap em %.1f MB\n",
                 BytesEmUso() / (1024.0 * 1024.0));
         fflush(g_rastro);
     }
 
-    void MedirArquivoAberto(const char* caminho)
+    void MedirArquivoAberto(const char* path)
     {
-        const size_t agora = BytesEmUso();
+        const size_t now = BytesEmUso();
 
-        if (g_arquivoAnterior[0] != '\0' && agora > g_bytesNaAbertura)
+        if (g_arquivoAnterior[0] != '\0' && now > g_bytesNaAbertura)
         {
-            const size_t custo = agora - g_bytesNaAbertura;
+            const size_t custo = now - g_bytesNaAbertura;
             if (custo >= kLimiarRelato)
             {
                 __android_log_print(ANDROID_LOG_WARN, "MuLegacy",
                     "memoria: %s custou %.1f MB (total %.1f MB)",
                     g_arquivoAnterior, custo / (1024.0 * 1024.0),
-                    agora / (1024.0 * 1024.0));
+                    now / (1024.0 * 1024.0));
             }
         }
 
         // Marca de agua a cada 256 MB, para localizar o momento da explosao mesmo
         // que ela venha diluida em muitos arquivos pequenos.
-        if (agora > g_picoBytes + 256u * 1024u * 1024u)
+        if (now > g_picoBytes + 256u * 1024u * 1024u)
         {
-            g_picoBytes = agora;
+            g_picoBytes = now;
             __android_log_print(ANDROID_LOG_WARN, "MuLegacy",
                 "memoria: passou de %.0f MB abrindo %s",
-                agora / (1024.0 * 1024.0), caminho);
+                now / (1024.0 * 1024.0), path);
         }
 
         // Na faixa suspeita, nomear na entrada: se este for o arquivo que mata o
@@ -389,15 +389,15 @@ namespace
         // por logcat voltou com ZERO linhas do app, inclusive as iniciais, e o
         // processo passou a morrer em 6 s em vez de 40 s. O arquivo, com flush por
         // linha, sobrevive ao SIGKILL, que e a unica forma de morte aqui.
-        if (agora >= kLimiarNomear && g_rastro != NULL)
+        if (now >= kLimiarNomear && g_rastro != NULL)
         {
-            fprintf(g_rastro, "%8.1f MB  %s\n", agora / (1024.0 * 1024.0), caminho);
+            fprintf(g_rastro, "%8.1f MB  %s\n", now / (1024.0 * 1024.0), path);
             fflush(g_rastro);   // sem isto o buffer morre com o processo
         }
 
-        strncpy(g_arquivoAnterior, caminho, sizeof(g_arquivoAnterior) - 1);
+        strncpy(g_arquivoAnterior, path, sizeof(g_arquivoAnterior) - 1);
         g_arquivoAnterior[sizeof(g_arquivoAnterior) - 1] = '\0';
-        g_bytesNaAbertura = agora;
+        g_bytesNaAbertura = now;
     }
 
     // Nomeia o arquivo em uso quando uma excecao nao tratada derruba o processo.
@@ -410,7 +410,7 @@ namespace
     {
         __android_log_print(ANDROID_LOG_ERROR, "MuLegacy",
             "TERMINATE: excecao nao tratada. Ultimo arquivo aberto: %s",
-            Platform::UltimoCaminhoAberto());
+            Platform::LastOpenedPath());
         _exit(1);   // evita os destrutores estaticos, que tocam um GL ja morto
     }
 
@@ -449,7 +449,7 @@ namespace
             Platform::SetLegacyFileOpenHook(&MedirArquivoAberto);
             std::set_terminate(&RelatarTerminacao);
 
-            if (!Platform::CriarCenaDeTitulo(width, height))
+            if (!Platform::CreateTitleScene(width, height))
             {
                 __android_log_print(ANDROID_LOG_WARN, "MuLegacy",
                     "cena do cliente indisponivel (assets?); seguindo com o terreno de teste");
@@ -461,7 +461,7 @@ namespace
             return;
 
         case ETAPA_DADOS_BASICOS:
-            Platform::CarregarDadosBasicos();
+            Platform::LoadBasicData();
             g_etapaSubida = ETAPA_INTERFACE;
             return;
 
@@ -500,7 +500,7 @@ namespace
         if (g_cenaAtiva)
         {
             // Mesma orquestracao do Web: Platform/LegacySceneBringup.cpp.
-            Platform::DesenharQuadroLegado(width, height);
+            Platform::DrawLegacyFrame(width, height);
             // O swap tem de acontecer AQUI tambem.
             //
             // Este ramo fazia `return` e caia fora da funcao antes do

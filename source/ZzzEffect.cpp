@@ -62,7 +62,85 @@ bool CheckCharacterRange(OBJECT* so, float Range, short PKKey, BYTE Kind = 0)
 
 bool AttackCharacterRange(int Index, vec3_t Position, float Range, BYTE Serial, short PKKey, WORD SkillSerialNum)
 {
-    return false; // we don't send this packet anymore
+    int Skill = CharacterAttribute->Skill[Index];
+
+    int     Count = 0;
+    int     DamageKey[5];
+    bool    DamageChr = false;
+
+    if (gMapManager.InBattleCastle() && battleCastle::IsBattleCastleStart())
+    {
+        DWORD att = TERRAIN_ATTRIBUTE(Position[0], Position[1]);
+        if ((att & TW_NOATTACKZONE) == TW_NOATTACKZONE)
+        {
+            return false;
+        }
+        DamageChr = true;
+    }
+
+    for (int i = 0; i < MAX_CHARACTERS_CLIENT; i++)
+    {
+        CHARACTER* c = &CharactersClient[i];
+        OBJECT* o = &c->Object;
+
+        if (o->Live == false
+            || o->Visible == false
+            || c == Hero
+            || (bool)c->Dead == true)
+        {
+            continue;
+        }
+
+        float dx = Position[0] - o->Position[0];
+        float dy = Position[1] - o->Position[1];
+        float Distance = sqrtf(dx * dx + dy * dy);
+
+        if (Distance <= Range
+            && (o->Kind == KIND_MONSTER || (o->Kind == KIND_PLAYER && (c->Key == PKKey || DamageChr))))
+        {
+            if (Skill == AT_SKILL_STORM || Skill == AT_SKILL_EVIL || (AT_SKILL_EVIL_SPIRIT_UP <= Skill && AT_SKILL_EVIL_SPIRIT_UP + 4 >= Skill) || (AT_SKILL_EVIL_SPIRIT_UP_M <= Skill && AT_SKILL_EVIL_SPIRIT_UP_M + 4 >= Skill)
+                )
+            {
+                if (c->m_bFixForm == false)
+                {
+                    c->StormTime = 10;
+                }
+
+                if (c->MonsterIndex >= 459 && c->MonsterIndex <= 462)
+                {
+                    c->StormTime = 0;
+                }
+                else if (524 <= c->MonsterIndex && c->MonsterIndex <= 528)
+                {
+                    c->StormTime = 0;
+                }
+            }
+
+            DamageKey[Count++] = c->Key;
+            if (Count >= 5)
+            {
+                break;
+            }
+        }
+    }
+
+    if (Count > 0)
+    {
+        if (Skill == AT_SKILL_DARK_SCREAM || (AT_SKILL_FIRE_SCREAM_UP <= Skill && AT_SKILL_FIRE_SCREAM_UP + 4 >= Skill))
+        {
+            BYTE _SerialTemp = (BYTE)SkillSerialNum;
+            SendRequestMagicAttack(Skill, (int)(Position[0] / TERRAIN_SCALE), (int)(Position[1] / TERRAIN_SCALE), _SerialTemp, Count, DamageKey, SkillSerialNum);
+        }
+        else
+        {
+            if (Skill != AT_SKILL_MULTI_SHOT)
+            {
+                SendRequestMagicAttack(Skill, (int)(Position[0] / TERRAIN_SCALE), (int)(Position[1] / TERRAIN_SCALE), Serial, Count, DamageKey, SkillSerialNum);
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 void CreateHealing(OBJECT* o)
@@ -318,6 +396,11 @@ void CheckTargetRange(OBJECT* o)
         }
     }
 }
+
+// Definidos junto de MoveEffects, no fim do arquivo; usados antes disso no
+// spawn do rastro da Twisting Slash.
+extern int g_liveWheelTrails;
+extern int g_wheelTrailCap;
 
 void CreateEffectFpsChecked(int Type, vec3_t Position, vec3_t Angle, vec3_t Light, int SubType, OBJECT* Owner, short PKKey, WORD SkillIndex, WORD Skill, WORD SkillSerialNum, float Scale, short int sTargetIndex)
 {
@@ -9763,7 +9846,14 @@ void MoveEffect(OBJECT* o, int iIndex)
         o->BlendMeshLight = o->LifeTime * 0.1f;
         break;
     case MODEL_SKILL_WHEEL1:
-        CreateEffectFpsChecked(MODEL_SKILL_WHEEL2, o->Position, o->Angle, o->Light, 4 - o->LifeTime, o->Owner, o->PKKey, o->Skill, o->Kind);
+        // Cada rastro criado aqui vira um modelo de arma animado por frame ate
+        // morrer (LifeTime 25, ~1 segundo). Com -wheeltrail=N o numero simultaneo
+        // fica limitado; sem a flag nada muda.
+        if (g_wheelTrailCap < 0 || g_liveWheelTrails < g_wheelTrailCap)
+        {
+            CreateEffectFpsChecked(MODEL_SKILL_WHEEL2, o->Position, o->Angle, o->Light, 4 - o->LifeTime, o->Owner, o->PKKey, o->Skill, o->Kind);
+            ++g_liveWheelTrails; // aproxima o limite dentro do proprio frame
+        }
         break;
     case MODEL_SKILL_WHEEL2:
         switch (o->SubType)
@@ -17977,12 +18067,49 @@ void MoveEffect(OBJECT* o, int iIndex)
     }
 }
 
+// Efeitos vivos no fim do movimento deste frame. O pool tem MAX_EFFECTS (200)
+// slots, e efeito e malha com alpha blend -- 200 deles empilhados sobre o
+// personagem e overdraw puro. A Twisting Slash gera um rastro (MODEL_SKILL_WHEEL2,
+// LifeTime 25) a cada tick de 25 fps enquanto o WHEEL1 vive, entao ela e a
+// candidata direta a encher esse pool. Sem este contador nao da para distinguir
+// "muitos efeitos" de "efeitos caros".
+int g_liveEffects = 0;
+
+// Rastros da Twisting Slash (skill Wheel) vivos agora. Cada um custa um modelo de
+// ARMA completo por frame -- RenderWheelWeapon faz b->Animation, RequestTerrainLight
+// e RenderPartObject com alpha. Nao e sprite barato, e por isso este contador existe
+// separado de g_liveEffects.
+int g_liveWheelTrails = 0;
+
+// -wheeltrail=N limita quantos rastros podem existir ao mesmo tempo. -1 = sem
+// limite, que e o comportamento historico e o default. Existe para medir: com o
+// numero na mao da para dizer quanto do mergulho de FPS vem daqui, e o jogador
+// julga o custo visual.
+int g_wheelTrailCap = -1;
+
 void MoveEffects()
 {
     if (SceneFlag == MAIN_SCENE)
     {
         g_pCatapultWindow->SetCameraPos();
     }
+
+    // Contagem ANTES de mover: MoveEffect e quem cria rastro novo, entao contar
+    // depois daria um numero que ja inclui os deste frame e o limite atrasaria um
+    // frame. A varredura e de 200 slots, irrelevante perto do que ela controla.
+    int alive = 0;
+    int trails = 0;
+    for (int i = 0; i < MAX_EFFECTS; i++)
+    {
+        const OBJECT* o = &Effects[i];
+        if (o->Live)
+        {
+            ++alive;
+            if (o->Type == MODEL_SKILL_WHEEL2) ++trails;
+        }
+    }
+    g_liveEffects = alive;
+    g_liveWheelTrails = trails;
 
     for (int i = 0; i < MAX_EFFECTS; i++)
     {

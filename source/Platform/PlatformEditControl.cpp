@@ -40,16 +40,16 @@ namespace
     struct ControleDeEdicao
     {
         std::wstring texto;
-        size_t       inicioSelecao;   // [inicioSelecao, fimSelecao) esta selecionado
-        size_t       fimSelecao;      // e tambem e onde fica o caret
-        int          limite;          // 0 = sem limite
+        size_t       selectionStart;   // [inicioSelecao, fimSelecao) esta selecionado
+        size_t       selectionEnd;      // e tambem e onde fica o caret
+        int          limit;          // 0 = sem limite
         DWORD        estilo;
         bool         visivel;
         WNDPROC      proc;            // proc corrente (EditWndProc depois do subclass)
-        LONG         dadosDoUsuario;  // GWL_USERDATA: o CUITextInputBox dono
-        int          largura;
-        int          altura;
-        HDC          ultimoDc;        // DC do ultimo WM_PAINT, usado por GetCaretPos
+        LONG         userData;  // GWL_USERDATA: o CUITextInputBox dono
+        int          width;
+        int          height;
+        HDC          lastDc;        // DC do ultimo WM_PAINT, usado por GetCaretPos
     };
 
     std::set<ControleDeEdicao*>& Registro()
@@ -60,10 +60,10 @@ namespace
 
     HWND g_foco = NULL;
 
-    ControleDeEdicao* Edicao(HWND janela)
+    ControleDeEdicao* Edicao(HWND window)
     {
-        if (janela == NULL) return NULL;
-        ControleDeEdicao* controle = (ControleDeEdicao*)janela;
+        if (window == NULL) return NULL;
+        ControleDeEdicao* controle = (ControleDeEdicao*)window;
         std::set<ControleDeEdicao*>& registro = Registro();
         return registro.find(controle) == registro.end() ? NULL : controle;
     }
@@ -72,45 +72,45 @@ namespace
     {
         if (classe == NULL) return false;
         // Comparacao sem diferenciar caixa, como faz o registro de classes do Win32.
-        static const wchar_t alvo[] = { 'e', 'd', 'i', 't', 0 };
+        static const wchar_t target[] = { 'e', 'd', 'i', 't', 0 };
         for (int i = 0; i < 4; ++i)
         {
             wchar_t caractere = classe[i];
             if (caractere >= 'A' && caractere <= 'Z') caractere = (wchar_t)(caractere + 32);
-            if (caractere != alvo[i]) return false;
+            if (caractere != target[i]) return false;
         }
         return classe[4] == 0;
     }
 
-    void NormalizarSelecao(ControleDeEdicao& controle)
+    void NormalizeSelection(ControleDeEdicao& controle)
     {
-        const size_t tamanho = controle.texto.size();
-        if (controle.inicioSelecao > tamanho) controle.inicioSelecao = tamanho;
-        if (controle.fimSelecao > tamanho)    controle.fimSelecao = tamanho;
-        if (controle.inicioSelecao > controle.fimSelecao)
+        const size_t size = controle.texto.size();
+        if (controle.selectionStart > size) controle.selectionStart = size;
+        if (controle.selectionEnd > size)    controle.selectionEnd = size;
+        if (controle.selectionStart > controle.selectionEnd)
         {
-            const size_t troca = controle.inicioSelecao;
-            controle.inicioSelecao = controle.fimSelecao;
-            controle.fimSelecao = troca;
+            const size_t troca = controle.selectionStart;
+            controle.selectionStart = controle.selectionEnd;
+            controle.selectionEnd = troca;
         }
     }
 
     // Apaga o trecho selecionado, se houver. Devolve true quando apagou algo.
-    bool ApagarSelecao(ControleDeEdicao& controle)
+    bool DeleteSelection(ControleDeEdicao& controle)
     {
-        NormalizarSelecao(controle);
-        if (controle.inicioSelecao == controle.fimSelecao) return false;
-        controle.texto.erase(controle.inicioSelecao,
-                             controle.fimSelecao - controle.inicioSelecao);
-        controle.fimSelecao = controle.inicioSelecao;
+        NormalizeSelection(controle);
+        if (controle.selectionStart == controle.selectionEnd) return false;
+        controle.texto.erase(controle.selectionStart,
+                             controle.selectionEnd - controle.selectionStart);
+        controle.selectionEnd = controle.selectionStart;
         return true;
     }
 
-    void ColocarCaret(ControleDeEdicao& controle, size_t posicao)
+    void ColocarCaret(ControleDeEdicao& controle, size_t position)
     {
-        if (posicao > controle.texto.size()) posicao = controle.texto.size();
-        controle.inicioSelecao = posicao;
-        controle.fimSelecao = posicao;
+        if (position > controle.texto.size()) position = controle.texto.size();
+        controle.selectionStart = position;
+        controle.selectionEnd = position;
     }
 
     // O que o texto MOSTRA: a propria cadeia, ou asteriscos num campo de senha.
@@ -124,7 +124,7 @@ namespace
         return std::wstring(controle.texto.size(), L'*');
     }
 
-    LRESULT ProcPadraoDeEdicao(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
+    LRESULT ProcPadraoDeEdicao(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
 }
 
 namespace Platform
@@ -137,9 +137,9 @@ namespace
     // O "proc padrao" do EDIT: e o que CallWindowProcW(m_hOldProc, ...) alcanca
     // depois de EditWndProc filtrar a mensagem. Toda a mudanca de estado do controle
     // acontece aqui, como no Windows.
-    LRESULT ProcPadraoDeEdicao(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+    LRESULT ProcPadraoDeEdicao(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
     {
-        ControleDeEdicao* achado = Edicao(janela);
+        ControleDeEdicao* achado = Edicao(window);
         if (achado == NULL) return 0;
         ControleDeEdicao& controle = *achado;
 
@@ -150,10 +150,10 @@ namespace
             const wchar_t caractere = (wchar_t)wParam;
             if (caractere == VK_BACK)
             {
-                if (!ApagarSelecao(controle) && controle.fimSelecao > 0)
+                if (!DeleteSelection(controle) && controle.selectionEnd > 0)
                 {
-                    controle.texto.erase(controle.fimSelecao - 1, 1);
-                    ColocarCaret(controle, controle.fimSelecao - 1);
+                    controle.texto.erase(controle.selectionEnd - 1, 1);
+                    ColocarCaret(controle, controle.selectionEnd - 1);
                 }
                 return 0;
             }
@@ -162,18 +162,18 @@ namespace
             if (caractere == VK_RETURN)
             {
                 if ((controle.estilo & ES_MULTILINE) == 0) return 0;
-                ApagarSelecao(controle);
-                controle.texto.insert(controle.fimSelecao, 1, L'\n');
-                ColocarCaret(controle, controle.fimSelecao + 1);
+                DeleteSelection(controle);
+                controle.texto.insert(controle.selectionEnd, 1, L'\n');
+                ColocarCaret(controle, controle.selectionEnd + 1);
                 return 0;
             }
             if (caractere == VK_TAB || caractere == VK_ESCAPE) return 0;
             if (caractere < 32) return 0;
-            ApagarSelecao(controle);
-            if (controle.limite > 0 && (int)controle.texto.size() >= controle.limite)
+            DeleteSelection(controle);
+            if (controle.limit > 0 && (int)controle.texto.size() >= controle.limit)
                 return 0;
-            controle.texto.insert(controle.fimSelecao, 1, caractere);
-            ColocarCaret(controle, controle.fimSelecao + 1);
+            controle.texto.insert(controle.selectionEnd, 1, caractere);
+            ColocarCaret(controle, controle.selectionEnd + 1);
             return 0;
         }
 
@@ -181,12 +181,12 @@ namespace
             switch (wParam)
             {
             case VK_LEFT:
-                NormalizarSelecao(controle);
-                ColocarCaret(controle, controle.fimSelecao > 0 ? controle.fimSelecao - 1 : 0);
+                NormalizeSelection(controle);
+                ColocarCaret(controle, controle.selectionEnd > 0 ? controle.selectionEnd - 1 : 0);
                 break;
             case VK_RIGHT:
-                NormalizarSelecao(controle);
-                ColocarCaret(controle, controle.fimSelecao + 1);
+                NormalizeSelection(controle);
+                ColocarCaret(controle, controle.selectionEnd + 1);
                 break;
             case VK_HOME:
                 ColocarCaret(controle, 0);
@@ -195,8 +195,8 @@ namespace
                 ColocarCaret(controle, controle.texto.size());
                 break;
             case VK_DELETE:
-                if (!ApagarSelecao(controle) && controle.fimSelecao < controle.texto.size())
-                    controle.texto.erase(controle.fimSelecao, 1);
+                if (!DeleteSelection(controle) && controle.selectionEnd < controle.texto.size())
+                    controle.texto.erase(controle.selectionEnd, 1);
                 break;
             default:
                 break;
@@ -204,12 +204,12 @@ namespace
             return 0;
 
         case EM_SETLIMITTEXT:
-            controle.limite = (int)wParam;
+            controle.limit = (int)wParam;
             return 0;
 
         case EM_GETSEL:
-            return (LRESULT)((controle.fimSelecao & 0xFFFF) << 16 |
-                             (controle.inicioSelecao & 0xFFFF));
+            return (LRESULT)((controle.selectionEnd & 0xFFFF) << 16 |
+                             (controle.selectionStart & 0xFFFF));
 
         case EM_SETSEL:
             // Convencao do EDIT: fim -1 quer dizer "ate o final". Inicio negativo o
@@ -221,34 +221,34 @@ namespace
             }
             else
             {
-                controle.inicioSelecao = (size_t)wParam;
-                controle.fimSelecao = (lParam < 0) ? controle.texto.size() : (size_t)lParam;
-                NormalizarSelecao(controle);
+                controle.selectionStart = (size_t)wParam;
+                controle.selectionEnd = (lParam < 0) ? controle.texto.size() : (size_t)lParam;
+                NormalizeSelection(controle);
             }
             return 0;
 
         case EM_REPLACESEL:
         {
-            ApagarSelecao(controle);
+            DeleteSelection(controle);
             const wchar_t* novo = (const wchar_t*)lParam;
             if (novo != NULL)
             {
                 std::wstring texto(novo);
-                if (controle.limite > 0 &&
-                    (int)(controle.texto.size() + texto.size()) > controle.limite)
-                    texto.resize((size_t)controle.limite - controle.texto.size());
-                controle.texto.insert(controle.fimSelecao, texto);
-                ColocarCaret(controle, controle.fimSelecao + texto.size());
+                if (controle.limit > 0 &&
+                    (int)(controle.texto.size() + texto.size()) > controle.limit)
+                    texto.resize((size_t)controle.limit - controle.texto.size());
+                controle.texto.insert(controle.selectionEnd, texto);
+                ColocarCaret(controle, controle.selectionEnd + texto.size());
             }
             return 0;
         }
 
         case EM_GETLINECOUNT:
         {
-            LRESULT linhas = 1;
+            LRESULT lines = 1;
             for (size_t i = 0; i < controle.texto.size(); ++i)
-                if (controle.texto[i] == L'\n') ++linhas;
-            return linhas;
+                if (controle.texto[i] == L'\n') ++lines;
+            return lines;
         }
 
         case WM_ERASEBKGND:
@@ -259,7 +259,7 @@ namespace
         case WM_PAINT:
         {
             HDC dc = (HDC)wParam;
-            controle.ultimoDc = dc;
+            controle.lastDc = dc;
             const std::wstring visivel = TextoVisivel(controle);
             if (visivel.empty()) return 0;
             if ((controle.estilo & ES_MULTILINE) == 0)
@@ -270,20 +270,20 @@ namespace
             }
             else
             {
-                SIZE alturaDeLinha = { 0, 0 };
-                GetTextExtentPoint32W(dc, L"Q", 1, &alturaDeLinha);
-                if (alturaDeLinha.cy <= 0) alturaDeLinha.cy = 12;
+                SIZE lineHeight = { 0, 0 };
+                GetTextExtentPoint32W(dc, L"Q", 1, &lineHeight);
+                if (lineHeight.cy <= 0) lineHeight.cy = 12;
                 int y = 0;
-                size_t inicio = 0;
-                while (inicio <= visivel.size())
+                size_t start = 0;
+                while (start <= visivel.size())
                 {
-                    size_t fim = visivel.find(L'\n', inicio);
+                    size_t fim = visivel.find(L'\n', start);
                     if (fim == std::wstring::npos) fim = visivel.size();
-                    if (fim > inicio)
-                        TextOutW(dc, 0, y, visivel.c_str() + inicio, (int)(fim - inicio));
-                    y += (int)alturaDeLinha.cy;
+                    if (fim > start)
+                        TextOutW(dc, 0, y, visivel.c_str() + start, (int)(fim - start));
+                    y += (int)lineHeight.cy;
                     if (fim == visivel.size()) break;
-                    inicio = fim + 1;
+                    start = fim + 1;
                 }
             }
             return 0;
@@ -301,19 +301,19 @@ namespace
 
     // Despacha para o proc corrente da janela, como SendMessage faz no Win32: depois
     // do subclass isso e EditWndProc, que filtra e depois chama o proc padrao.
-    LRESULT DespacharParaEdicao(ControleDeEdicao& controle, HWND janela,
+    LRESULT DespacharParaEdicao(ControleDeEdicao& controle, HWND window,
                                 UINT mensagem, WPARAM wParam, LPARAM lParam)
     {
         if (controle.proc != NULL)
-            return controle.proc(janela, mensagem, wParam, lParam);
-        return ProcPadraoDeEdicao(janela, mensagem, wParam, lParam);
+            return controle.proc(window, mensagem, wParam, lParam);
+        return ProcPadraoDeEdicao(window, mensagem, wParam, lParam);
     }
 }
 
 // ---- Superficie Win32 esperada pelo cliente ---------------------------------
 
 HWND CreateWindowW(LPCWSTR classe, LPCWSTR texto, DWORD estilo,
-                   int, int, int largura, int altura,
+                   int, int, int width, int height,
                    HWND, HMENU, HINSTANCE, LPVOID)
 {
     if (!ENomeDeClasseEdit(classe))
@@ -322,210 +322,210 @@ HWND CreateWindowW(LPCWSTR classe, LPCWSTR texto, DWORD estilo,
         return NULL;
     }
     ControleDeEdicao* controle = new ControleDeEdicao();
-    controle->inicioSelecao = 0;
-    controle->fimSelecao = 0;
-    controle->limite = 0;
+    controle->selectionStart = 0;
+    controle->selectionEnd = 0;
+    controle->limit = 0;
     controle->estilo = estilo;
     // WS_VISIBLE no estilo, mas CUITextInputBox::Init chama ShowWindow(SW_HIDE) logo
     // depois e revela o campo por SetState. Respeitar o estilo aqui deixa o campo
     // coerente caso alguem crie um EDIT sem passar por SetState.
     controle->visivel = (estilo & WS_VISIBLE) != 0;
     controle->proc = NULL;
-    controle->dadosDoUsuario = 0;
-    controle->largura = largura;
-    controle->altura = altura;
-    controle->ultimoDc = NULL;
+    controle->userData = 0;
+    controle->width = width;
+    controle->height = height;
+    controle->lastDc = NULL;
     if (texto != NULL) controle->texto.assign(texto);
     Registro().insert(controle);
     return (HWND)controle;
 }
 
-BOOL DestroyWindow(HWND janela)
+BOOL DestroyWindow(HWND window)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return FALSE;
-    if (g_foco == janela) g_foco = NULL;
+    if (g_foco == window) g_foco = NULL;
     Registro().erase(controle);
     delete controle;
     return TRUE;
 }
 
-BOOL ShowWindow(HWND janela, int comando)
+BOOL ShowWindow(HWND window, int comando)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return FALSE;
-    const BOOL anterior = controle->visivel ? TRUE : FALSE;
+    const BOOL previous = controle->visivel ? TRUE : FALSE;
     controle->visivel = (comando != SW_HIDE);
-    if (!controle->visivel && g_foco == janela) g_foco = NULL;
-    return anterior;
+    if (!controle->visivel && g_foco == window) g_foco = NULL;
+    return previous;
 }
 
-BOOL IsWindowVisible(HWND janela)
+BOOL IsWindowVisible(HWND window)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     return (controle != NULL && controle->visivel) ? TRUE : FALSE;
 }
 
-BOOL SetWindowPos(HWND janela, HWND, int, int, int largura, int altura, UINT sinalizadores)
+BOOL SetWindowPos(HWND window, HWND, int, int, int width, int height, UINT sinalizadores)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return FALSE;
     if ((sinalizadores & SWP_NOSIZE) == 0)
     {
-        controle->largura = largura;
-        controle->altura = altura;
+        controle->width = width;
+        controle->height = height;
     }
     return TRUE;
 }
 
-LONG SetWindowLongW(HWND janela, int indice, LONG valor)
+LONG SetWindowLongW(HWND window, int index, LONG value)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return 0;
-    if (indice == GWL_WNDPROC)
+    if (index == GWL_WNDPROC)
     {
         // O "proc antigo" devolvido e o proc padrao do EDIT. E dele que
         // CUITextInputBox guarda o ponteiro em m_hOldProc e para quem EditWndProc
         // reenvia toda mensagem que nao filtrou -- o subclass do Win32, igual.
-        WNDPROC anterior = (controle->proc != NULL) ? controle->proc : &ProcPadraoDeEdicao;
-        controle->proc = (WNDPROC)valor;
-        return (LONG)anterior;
+        WNDPROC previous = (controle->proc != NULL) ? controle->proc : &ProcPadraoDeEdicao;
+        controle->proc = (WNDPROC)value;
+        return (LONG)previous;
     }
-    if (indice == GWL_USERDATA)
+    if (index == GWL_USERDATA)
     {
-        const LONG anterior = controle->dadosDoUsuario;
-        controle->dadosDoUsuario = valor;
-        return anterior;
+        const LONG previous = controle->userData;
+        controle->userData = value;
+        return previous;
     }
-    if (indice == GWL_STYLE)
+    if (index == GWL_STYLE)
     {
-        const LONG anterior = (LONG)controle->estilo;
-        controle->estilo = (DWORD)valor;
-        return anterior;
+        const LONG previous = (LONG)controle->estilo;
+        controle->estilo = (DWORD)value;
+        return previous;
     }
     return 0;
 }
 
-LONG SetWindowLongA(HWND janela, int indice, LONG valor)
+LONG SetWindowLongA(HWND window, int index, LONG value)
 {
-    return SetWindowLongW(janela, indice, valor);
+    return SetWindowLongW(window, index, value);
 }
 
-LONG GetWindowLongW(HWND janela, int indice)
+LONG GetWindowLongW(HWND window, int index)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return 0;
-    if (indice == GWL_WNDPROC)  return (LONG)controle->proc;
-    if (indice == GWL_USERDATA) return controle->dadosDoUsuario;
-    if (indice == GWL_STYLE)    return (LONG)controle->estilo;
+    if (index == GWL_WNDPROC)  return (LONG)controle->proc;
+    if (index == GWL_USERDATA) return controle->userData;
+    if (index == GWL_STYLE)    return (LONG)controle->estilo;
     return 0;
 }
 
-LONG GetWindowLongA(HWND janela, int indice)
+LONG GetWindowLongA(HWND window, int index)
 {
-    return GetWindowLongW(janela, indice);
+    return GetWindowLongW(window, index);
 }
 
-LRESULT CallWindowProcW(WNDPROC proc, HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+LRESULT CallWindowProcW(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
     if (proc == NULL) return 0;
-    return proc(janela, mensagem, wParam, lParam);
+    return proc(window, mensagem, wParam, lParam);
 }
 
-LRESULT CallWindowProcA(WNDPROC proc, HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+LRESULT CallWindowProcA(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    return CallWindowProcW(proc, janela, mensagem, wParam, lParam);
+    return CallWindowProcW(proc, window, mensagem, wParam, lParam);
 }
 
-LRESULT SendMessageW(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+LRESULT SendMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL)
     {
         PLATFORM_STUB_ONCE("SendMessageW (janela sem equivalente fora do Windows)");
         return 0;
     }
-    return DespacharParaEdicao(*controle, janela, mensagem, wParam, lParam);
+    return DespacharParaEdicao(*controle, window, mensagem, wParam, lParam);
 }
 
-LRESULT SendMessage(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+LRESULT SendMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    return SendMessageW(janela, mensagem, wParam, lParam);
+    return SendMessageW(window, mensagem, wParam, lParam);
 }
 
 // Sem fila de mensagens: postar e entregar na hora. Para os usos do cliente
 // (EM_SETSEL depois de dar foco) o efeito e o mesmo.
-BOOL PostMessageW(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+BOOL PostMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    if (Edicao(janela) == NULL) return FALSE;
-    SendMessageW(janela, mensagem, wParam, lParam);
+    if (Edicao(window) == NULL) return FALSE;
+    SendMessageW(window, mensagem, wParam, lParam);
     return TRUE;
 }
 
-BOOL PostMessageA(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+BOOL PostMessageA(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    return PostMessageW(janela, mensagem, wParam, lParam);
+    return PostMessageW(window, mensagem, wParam, lParam);
 }
 
-BOOL PostMessage(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam)
+BOOL PostMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam)
 {
-    return PostMessageW(janela, mensagem, wParam, lParam);
+    return PostMessageW(window, mensagem, wParam, lParam);
 }
 
-int GetWindowTextW(HWND janela, LPWSTR destino, int tamanho)
+int GetWindowTextW(HWND window, LPWSTR destination, int size)
 {
-    if (destino == NULL || tamanho <= 0) return 0;
-    destino[0] = 0;
-    ControleDeEdicao* controle = Edicao(janela);
+    if (destination == NULL || size <= 0) return 0;
+    destination[0] = 0;
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return 0;
     // O texto devolvido e o REAL, nunca a mascara: e por aqui que a senha digitada
     // chega ao pacote de login.
     int copiados = 0;
-    for (; copiados < tamanho - 1 && copiados < (int)controle->texto.size(); ++copiados)
-        destino[copiados] = controle->texto[copiados];
-    destino[copiados] = 0;
+    for (; copiados < size - 1 && copiados < (int)controle->texto.size(); ++copiados)
+        destination[copiados] = controle->texto[copiados];
+    destination[copiados] = 0;
     return copiados;
 }
 
-int GetWindowText(HWND janela, LPSTR destino, int tamanho)
+int GetWindowText(HWND window, LPSTR destination, int size)
 {
-    if (destino == NULL || tamanho <= 0) return 0;
-    destino[0] = '\0';
-    ControleDeEdicao* controle = Edicao(janela);
+    if (destination == NULL || size <= 0) return 0;
+    destination[0] = '\0';
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return 0;
     int copiados = 0;
-    for (; copiados < tamanho - 1 && copiados < (int)controle->texto.size(); ++copiados)
+    for (; copiados < size - 1 && copiados < (int)controle->texto.size(); ++copiados)
     {
         const wchar_t caractere = controle->texto[copiados];
-        destino[copiados] = (caractere < 256) ? (char)caractere : '?';
+        destination[copiados] = (caractere < 256) ? (char)caractere : '?';
     }
-    destino[copiados] = '\0';
+    destination[copiados] = '\0';
     return copiados;
 }
 
-int GetWindowTextA(HWND janela, LPSTR destino, int tamanho)
+int GetWindowTextA(HWND window, LPSTR destination, int size)
 {
-    return GetWindowText(janela, destino, tamanho);
+    return GetWindowText(window, destination, size);
 }
 
-BOOL SetWindowTextW(HWND janela, LPCWSTR texto)
+BOOL SetWindowTextW(HWND window, LPCWSTR texto)
 {
-    ControleDeEdicao* controle = Edicao(janela);
+    ControleDeEdicao* controle = Edicao(window);
     if (controle == NULL) return FALSE;
     controle->texto.assign(texto != NULL ? texto : L"");
-    if (controle->limite > 0 && (int)controle->texto.size() > controle->limite)
-        controle->texto.resize((size_t)controle->limite);
+    if (controle->limit > 0 && (int)controle->texto.size() > controle->limit)
+        controle->texto.resize((size_t)controle->limit);
     ColocarCaret(*controle, controle->texto.size());
     return TRUE;
 }
 
-BOOL SetWindowTextA(HWND janela, LPCSTR texto)
+BOOL SetWindowTextA(HWND window, LPCSTR texto)
 {
     std::wstring largo;
     if (texto != NULL)
         for (int i = 0; texto[i] != '\0'; ++i)
             largo.push_back((wchar_t)(unsigned char)texto[i]);
-    return SetWindowTextW(janela, largo.c_str());
+    return SetWindowTextW(window, largo.c_str());
 }
 
 BOOL GetCaretPos(LPPOINT ponto)
@@ -537,26 +537,26 @@ BOOL GetCaretPos(LPPOINT ponto)
     if (controle == NULL) return FALSE;
     // A largura do caret e a do texto que vem ANTES dele, medida com a mesma fonte
     // usada no desenho -- por isso o DC guardado no ultimo WM_PAINT.
-    if (controle->ultimoDc != NULL)
+    if (controle->lastDc != NULL)
     {
-        NormalizarSelecao(*controle);
+        NormalizeSelection(*controle);
         const std::wstring visivel = TextoVisivel(*controle);
         SIZE medida = { 0, 0 };
-        if (controle->fimSelecao > 0)
-            GetTextExtentPoint32W(controle->ultimoDc, visivel.c_str(),
-                                  (int)controle->fimSelecao, &medida);
+        if (controle->selectionEnd > 0)
+            GetTextExtentPoint32W(controle->lastDc, visivel.c_str(),
+                                  (int)controle->selectionEnd, &medida);
         ponto->x = medida.cx;
     }
     return TRUE;
 }
 
-HWND SetFocus(HWND janela)
+HWND SetFocus(HWND window)
 {
-    const HWND anterior = g_foco;
+    const HWND previous = g_foco;
     // Foco em janela que nao e EDIT (a janela principal) apenas limpa o foco de
     // texto: e o que faz o teclado voltar a ser do jogo.
-    g_foco = (Edicao(janela) != NULL) ? janela : NULL;
-    return anterior;
+    g_foco = (Edicao(window) != NULL) ? window : NULL;
+    return previous;
 }
 
 HWND GetFocus()

@@ -143,11 +143,11 @@ namespace Platform
 #endif
     }
 
-    static char g_ultimoCaminho[1024] = {0};
+    static char g_lastPath[1024] = {0};
 
-    const char* UltimoCaminhoAberto()
+    const char* LastOpenedPath()
     {
-        return g_ultimoCaminho;
+        return g_lastPath;
     }
 
     static LegacyAssetFetchHook g_assetFetchHook = NULL;
@@ -178,8 +178,8 @@ namespace Platform
 #else
         char normalized[1024];
         const char* target = NormalizeLegacyPath(path, normalized, sizeof(normalized));
-        strncpy(g_ultimoCaminho, target, sizeof(g_ultimoCaminho) - 1);
-        g_ultimoCaminho[sizeof(g_ultimoCaminho) - 1] = '\0';
+        strncpy(g_lastPath, target, sizeof(g_lastPath) - 1);
+        g_lastPath[sizeof(g_lastPath) - 1] = '\0';
         // Uma saida so, para o gancho de abertura nao deixar caminho de fora.
         FILE* file = fopen(target, mode);
 

@@ -74,27 +74,27 @@ CProtect* gProtect = PrepararProtect();
 namespace
 {
     // Copia `valor` num campo de tamanho fixo, sempre terminando em '\0'.
-    void CopiarCampo(char* destino, size_t capacidade, const std::string& valor)
+    void CopiarCampo(char* destination, size_t capacidade, const std::string& value)
     {
         if (capacidade == 0) return;
-        const size_t quantos = (valor.size() < capacidade - 1) ? valor.size() : capacidade - 1;
-        memcpy(destino, valor.c_str(), quantos);
-        destino[quantos] = '\0';
+        const size_t quantos = (value.size() < capacidade - 1) ? value.size() : capacidade - 1;
+        memcpy(destination, value.c_str(), quantos);
+        destination[quantos] = '\0';
     }
 
     // Corta espacos e tabulacoes das duas pontas. O MainInfo.ini usa tabulacoes
     // para alinhar os valores, entao sem isto o IP viria com tabulacao no meio.
     std::string Aparar(const std::string& texto)
     {
-        size_t inicio = 0;
-        while (inicio < texto.size() && (texto[inicio] == ' ' || texto[inicio] == '\t' ||
-                                         texto[inicio] == '\r' || texto[inicio] == '\n'))
-            ++inicio;
+        size_t start = 0;
+        while (start < texto.size() && (texto[start] == ' ' || texto[start] == '\t' ||
+                                         texto[start] == '\r' || texto[start] == '\n'))
+            ++start;
         size_t fim = texto.size();
-        while (fim > inicio && (texto[fim - 1] == ' ' || texto[fim - 1] == '\t' ||
+        while (fim > start && (texto[fim - 1] == ' ' || texto[fim - 1] == '\t' ||
                                texto[fim - 1] == '\r' || texto[fim - 1] == '\n'))
             --fim;
-        return texto.substr(inicio, fim - inicio);
+        return texto.substr(start, fim - start);
     }
 }
 
@@ -110,8 +110,8 @@ namespace Platform
         // O arquivo continua podendo sobrescrever.
         gProtect->m_MainInfo.CharListS13 = 1;
 
-        FILE* arquivo = Platform::LegacyFileOpen("MainInfo.ini", "rb");
-        if (arquivo == NULL)
+        FILE* file = Platform::LegacyFileOpen("MainInfo.ini", "rb");
+        if (file == NULL)
         {
             // Sem hardcode de endereco: trocar de servidor nao deve exigir
             // recompilar, e um IP embutido em codigo compartilhado seria pior do que
@@ -121,32 +121,32 @@ namespace Platform
             return;
         }
 
-        char linha[512];
-        while (fgets(linha, sizeof(linha), arquivo) != NULL)
+        char line[512];
+        while (fgets(line, sizeof(line), file) != NULL)
         {
-            std::string texto = Aparar(linha);
+            std::string texto = Aparar(line);
             if (texto.empty() || texto[0] == ';' || texto[0] == '[') continue;
 
             const size_t igual = texto.find('=');
             if (igual == std::string::npos) continue;
 
-            const std::string chave = Aparar(texto.substr(0, igual));
-            const std::string valor = Aparar(texto.substr(igual + 1));
+            const std::string key = Aparar(texto.substr(0, igual));
+            const std::string value = Aparar(texto.substr(igual + 1));
 
-            if      (chave == "IpAddress")        CopiarCampo(gProtect->m_MainInfo.IpAddress, sizeof(gProtect->m_MainInfo.IpAddress), valor);
-            else if (chave == "IpAddressPort")    gProtect->m_MainInfo.IpAddressPort = (WORD)atoi(valor.c_str());
-            else if (chave == "ClientVersion")    CopiarCampo(gProtect->m_MainInfo.ClientVersion, sizeof(gProtect->m_MainInfo.ClientVersion), valor);
-            else if (chave == "ClientSerial")     CopiarCampo(gProtect->m_MainInfo.ClientSerial, sizeof(gProtect->m_MainInfo.ClientSerial), valor);
-            else if (chave == "WindowName")       CopiarCampo(gProtect->m_MainInfo.WindowName, sizeof(gProtect->m_MainInfo.WindowName), valor);
-            else if (chave == "ScreenShotPath")   CopiarCampo(gProtect->m_MainInfo.ScreenShotPath, sizeof(gProtect->m_MainInfo.ScreenShotPath), valor);
-            else if (chave == "CharListSeason13") gProtect->m_MainInfo.CharListS13 = atoi(valor.c_str());
-            else if (chave == "OnlyCryptedLua")   gProtect->m_MainInfo.LuaCrypt = (BYTE)atoi(valor.c_str());
+            if      (key == "IpAddress")        CopiarCampo(gProtect->m_MainInfo.IpAddress, sizeof(gProtect->m_MainInfo.IpAddress), value);
+            else if (key == "IpAddressPort")    gProtect->m_MainInfo.IpAddressPort = (WORD)atoi(value.c_str());
+            else if (key == "ClientVersion")    CopiarCampo(gProtect->m_MainInfo.ClientVersion, sizeof(gProtect->m_MainInfo.ClientVersion), value);
+            else if (key == "ClientSerial")     CopiarCampo(gProtect->m_MainInfo.ClientSerial, sizeof(gProtect->m_MainInfo.ClientSerial), value);
+            else if (key == "WindowName")       CopiarCampo(gProtect->m_MainInfo.WindowName, sizeof(gProtect->m_MainInfo.WindowName), value);
+            else if (key == "ScreenShotPath")   CopiarCampo(gProtect->m_MainInfo.ScreenShotPath, sizeof(gProtect->m_MainInfo.ScreenShotPath), value);
+            else if (key == "CharListSeason13") gProtect->m_MainInfo.CharListS13 = atoi(value.c_str());
+            else if (key == "OnlyCryptedLua")   gProtect->m_MainInfo.LuaCrypt = (BYTE)atoi(value.c_str());
             // O PrivateCode e usado como divisor em CLuaDecrypt
             // (`n % strlen(m_PrivateCode)`): vazio seria divisao por zero no caminho
             // de script cifrado.
-            else if (chave == "PrivateCode")      CopiarCampo(gProtect->m_MainInfo.m_PrivateCode, sizeof(gProtect->m_MainInfo.m_PrivateCode), valor);
+            else if (key == "PrivateCode")      CopiarCampo(gProtect->m_MainInfo.m_PrivateCode, sizeof(gProtect->m_MainInfo.m_PrivateCode), value);
         }
-        fclose(arquivo);
+        fclose(file);
 
         // As duas atribuicoes que o Winmain faz em 1097-1102. `Version` e `Serial`
         // NAO entram aqui: WSclient.cpp:129-130 ja os define com exatamente os
@@ -320,32 +320,32 @@ void CheckHack(void)
 // inteira mesmo assim para o resultado continuar igual se o arquivo aparecer.
 namespace
 {
-    WORD DecifrarChaveDeSoma(WORD origem)
+    WORD DecryptChecksumKey(WORD source)
     {
-        const WORD acumulado = (WORD)(origem ^ 0xB479);
+        const WORD acumulado = (WORD)(source ^ 0xB479);
         return (WORD)(((acumulado >> 10) << 4) | (acumulado & 0xF));
     }
 
-    DWORD GerarSoma(const BYTE* buffer, DWORD tamanho, WORD chave)
+    DWORD GenerateChecksum(const BYTE* buffer, DWORD size, WORD key)
     {
-        const DWORD dwChave = (DWORD)chave;
-        DWORD resultado = dwChave << 9;
-        if (tamanho < 4) return resultado;
-        for (DWORD lidos = 0; lidos <= tamanho - 4; lidos += 4)
+        const DWORD dwKey = (DWORD)key;
+        DWORD resultado = dwKey << 9;
+        if (size < 4) return resultado;
+        for (DWORD lidos = 0; lidos <= size - 4; lidos += 4)
         {
-            DWORD valor;
-            memcpy(&valor, buffer + lidos, sizeof(DWORD));
+            DWORD value;
+            memcpy(&value, buffer + lidos, sizeof(DWORD));
 
-            switch ((lidos / 4 + chave) % 3)
+            switch ((lidos / 4 + key) % 3)
             {
-            case 0: resultado ^= valor; break;
-            case 1: resultado += valor; break;
-            case 2: resultado <<= (valor % 11); resultado ^= valor; break;
+            case 0: resultado ^= value; break;
+            case 1: resultado += value; break;
+            case 2: resultado <<= (value % 11); resultado ^= value; break;
             }
 
             // Sempre verdadeiro, ja que o passo e 4; preservado como no original.
             if (0 == (lidos % 4))
-                resultado ^= ((dwChave + resultado) >> ((lidos / 4) % 16 + 3));
+                resultado ^= ((dwKey + resultado) >> ((lidos / 4) % 16 + 3));
         }
         return resultado;
     }
@@ -353,23 +353,23 @@ namespace
 
 DWORD GetCheckSum(WORD wKey)
 {
-    wKey = DecifrarChaveDeSoma(wKey);
+    wKey = DecryptChecksumKey(wKey);
 
-    FILE* arquivo = Platform::LegacyFileOpen("data\\local\\Gameguard.csr", "rb");
-    if (arquivo == NULL) return 0;
+    FILE* file = Platform::LegacyFileOpen("data\\local\\Gameguard.csr", "rb");
+    if (file == NULL) return 0;
 
-    fseek(arquivo, 0, SEEK_END);
-    const long tamanho = ftell(arquivo);
-    fseek(arquivo, 0, SEEK_SET);
-    if (tamanho <= 0) { fclose(arquivo); return 0; }
+    fseek(file, 0, SEEK_END);
+    const long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    if (size <= 0) { fclose(file); return 0; }
 
-    BYTE* conteudo = new BYTE[(size_t)tamanho];
-    const size_t lidos = fread(conteudo, 1, (size_t)tamanho, arquivo);
-    fclose(arquivo);
+    BYTE* conteudo = new BYTE[(size_t)size];
+    const size_t lidos = fread(conteudo, 1, (size_t)size, file);
+    fclose(file);
 
-    const DWORD soma = GerarSoma(conteudo, (DWORD)lidos, wKey);
+    const DWORD sum = GenerateChecksum(conteudo, (DWORD)lidos, wKey);
     delete [] conteudo;
-    return soma;
+    return sum;
 }
 
 // TODO(Platform): pertencem ao Winmain / camada de janela. Nao ha janela para

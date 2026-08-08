@@ -8,7 +8,7 @@ struct FONT_INFO {
 	int AddSize;
 	int CharSet;
 	std::string Name;
-	DWORD Sublinhado;
+	DWORD Underline;
 	DWORD Italico;
 	DWORD Riscado;
 	float MultiSize;

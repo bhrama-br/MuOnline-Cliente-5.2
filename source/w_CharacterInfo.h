@@ -175,7 +175,7 @@ public:
     BYTE        AttackFlag;
 
     BYTE        TargetAngle;
-    BYTE        Dead;
+    float       Dead;
     WORD		Skill;
     BYTE        SwordCount;
     BYTE		byExtensionSkill;

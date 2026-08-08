@@ -316,10 +316,10 @@ static void ReadLegacyMatrices(float* projection, float* modelView)
 			}
 			for (int i = 0; i < 16; ++i)
 			{
-				const float escalaP = fabsf(glProjection[i]) > 1.f ? fabsf(glProjection[i]) : 1.f;
-				const float escalaM = fabsf(glModelView[i]) > 1.f ? fabsf(glModelView[i]) : 1.f;
-				const float dp = fabsf(glProjection[i] - projection[i]) / escalaP;
-				const float dm = fabsf(glModelView[i] - modelView[i]) / escalaM;
+				const float scaleP = fabsf(glProjection[i]) > 1.f ? fabsf(glProjection[i]) : 1.f;
+				const float scaleM = fabsf(glModelView[i]) > 1.f ? fabsf(glModelView[i]) : 1.f;
+				const float dp = fabsf(glProjection[i] - projection[i]) / scaleP;
+				const float dm = fabsf(glModelView[i] - modelView[i]) / scaleM;
 				if (dp > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dp;
 				if (dm > g_cpuMatrixMaxDivergence) g_cpuMatrixMaxDivergence = dm;
 			}
@@ -1041,7 +1041,7 @@ void SetLegacyFog(bool enabled)
 
 // Ultima cor definida. O legado a relia com glGetFloatv(GL_CURRENT_COLOR), que
 // no GLES3 e INVALID_ENUM e devolvia lixo ao chamador.
-static float g_corLegadaAtual[4] = { 1.f, 1.f, 1.f, 1.f };
+static float g_currentLegacyColor[4] = { 1.f, 1.f, 1.f, 1.f };
 
 void SetLegacyColor4f(float red,float green,float blue,float alpha)
 {
@@ -1049,14 +1049,14 @@ void SetLegacyColor4f(float red,float green,float blue,float alpha)
     if (!Platform::IsGlslLegacyBackendEnabled())
         glColor4f(red,green,blue,alpha);
 #endif
-    g_corLegadaAtual[0] = red;   g_corLegadaAtual[1] = green;
-    g_corLegadaAtual[2] = blue;  g_corLegadaAtual[3] = alpha;
+    g_currentLegacyColor[0] = red;   g_currentLegacyColor[1] = green;
+    g_currentLegacyColor[2] = blue;  g_currentLegacyColor[3] = alpha;
     Platform::GetLegacyRenderAdapter().Color4f(red,green,blue,alpha);
 }
 
-void GetLegacyColor4f(float* destino)
+void GetLegacyColor4f(float* destination)
 {
-    for (int i = 0; i < 4; ++i) destino[i] = g_corLegadaAtual[i];
+    for (int i = 0; i < 4; ++i) destination[i] = g_currentLegacyColor[i];
 }
 
 void SetLegacyColor4ub(unsigned char red,unsigned char green,unsigned char blue,unsigned char alpha)

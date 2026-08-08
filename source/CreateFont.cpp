@@ -13,7 +13,7 @@ CCreateFont::~CCreateFont()
 {
 }
 
-void AddFont(int index, int bold, int addSize, int charSet, std::string name, float multiSize, int italico, int sublinhado, int riscado) {
+void AddFont(int index, int bold, int addSize, int charSet, std::string name, float multiSize, int italico, int underline, int riscado) {
 
 	FONT_INFO info;
 	info.Index = index;
@@ -22,7 +22,7 @@ void AddFont(int index, int bold, int addSize, int charSet, std::string name, fl
 	info.CharSet = charSet;
 	info.MultiSize = multiSize;
 	info.Italico = italico;
-	info.Sublinhado = sublinhado;
+	info.Underline = underline;
 	info.Riscado = riscado;
 	info.Name = name;
 
@@ -53,7 +53,7 @@ void CCreateFont::SetFont(int iFontSize, int FontHeight, int nFixFontSize, int n
 
 	for (auto const& fontInfo : gCreateFont.m_fontInfo)
 	{
-		auto newFont = CreateFont(std::ceil(iFontSize * fontInfo.second.MultiSize) + fontInfo.second.AddSize, 0, 0, 0, fontInfo.second.Bold, fontInfo.second.Italico, fontInfo.second.Sublinhado, fontInfo.second.Riscado, fontInfo.second.CharSet, 0, 0, 3, 0, fontInfo.second.Name.c_str());
+		auto newFont = CreateFont(std::ceil(iFontSize * fontInfo.second.MultiSize) + fontInfo.second.AddSize, 0, 0, 0, fontInfo.second.Bold, fontInfo.second.Italico, fontInfo.second.Underline, fontInfo.second.Riscado, fontInfo.second.CharSet, 0, 0, 3, 0, fontInfo.second.Name.c_str());
 		this->m_newFont[fontInfo.second.Index] = newFont;
 	}
 }

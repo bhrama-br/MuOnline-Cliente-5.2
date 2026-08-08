@@ -260,7 +260,7 @@ namespace
 	// Quem recebe os eventos que no Windows viriam pelo window proc. O despacho
 	// e o mesmo de Winmain.cpp (WM_ASYNCSELECTMSG): leitura chama nRecv,
 	// escrita chama FDWriteSend, fechamento chama Close.
-	CWsctlc* g_clienteAtivo = 0;
+	CWsctlc* g_activeClient = 0;
 
 
 	// Porta do ultimo Connect. A reconexao automatica precisa saber se quem caiu foi o
@@ -268,12 +268,12 @@ namespace
 	// cliente ter migrado para o jogo DESTROI a conexao boa -- foi o que aconteceu na
 	// primeira versao (o log mostrava "Connect: 127.0.0.1:56049" seguido de
 	// "reconectando ao ConnectServer").
-	unsigned short g_ultimaPortaConectada = 0;
+	unsigned short g_lastConnectedPort = 0;
 
 	void EntregarEventoDeSocket(int evento, int erro)
 	{
 		(void)erro;
-		if (g_clienteAtivo == 0) return;
+		if (g_activeClient == 0) return;
 
 		switch (evento)
 		{
@@ -297,14 +297,14 @@ namespace
 			// falhar (sSend chama Close por conta propria) e pelo conjunto de excecao
 			// do select. Detectar a desconexao um pouco mais tarde e muito melhor do
 			// que fechar o que esta funcionando.
-			g_clienteAtivo->nRecv();
+			g_activeClient->nRecv();
 			break;
 		}
 		case FD_WRITE:
-			g_clienteAtivo->FDWriteSend();
+			g_activeClient->FDWriteSend();
 			break;
 		case FD_CLOSE:
-			g_clienteAtivo->Close();
+			g_activeClient->Close();
 
 			// RECONEXAO AUTOMATICA enquanto ainda estamos escolhendo servidor.
 			//
@@ -325,7 +325,7 @@ namespace
 			// A porta e o que decide: se a conexao que caiu era a do servidor de jogo,
 			// reconectar ao ConnectServer seria destruir o progresso.
 			if (SceneFlag == LOG_IN_SCENE && !g_bGameServerConnected &&
-			    g_ultimaPortaConectada == g_ServerPort &&
+			    g_lastConnectedPort == g_ServerPort &&
 			    szServerIpAddress != NULL && szServerIpAddress[0] != '\0')
 			{
 				fprintf(stderr, "[rede] reconectando ao ConnectServer (%s:%d)\n",
@@ -343,7 +343,7 @@ int CWsctlc::Connect(char *ip_addr, unsigned short port, DWORD WinMsgNum)
 {
 #if !defined(_WIN32)
 	// Guarda a porta para a decisao de reconexao no FD_CLOSE (ver g_ultimaPortaConectada).
-	g_ultimaPortaConectada = port;
+	g_lastConnectedPort = port;
 #endif
 	sockaddr_in		addr;
 	int nResult;
@@ -418,7 +418,7 @@ int CWsctlc::Connect(char *ip_addr, unsigned short port, DWORD WinMsgNum)
 	// EntregarEventoDeSocket, acima). WinMsgNum so identificava a mensagem.
 	(void)WinMsgNum;
 	(void)nResult;
-	g_clienteAtivo = this;
+	g_activeClient = this;
 	Platform::RegisterLegacySocket((int)m_socket, &EntregarEventoDeSocket);
 #endif
 	return 1;

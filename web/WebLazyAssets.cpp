@@ -40,18 +40,18 @@ namespace
     int  g_buscados = 0;
     long g_bytesBuscados = 0;
 
-    bool JaFalhou(const char* caminho)
+    bool JaFalhou(const char* path)
     {
         for (int i = 0; i < g_totalAusentes; ++i)
-            if (strcmp(g_ausentes[i], caminho) == 0) return true;
+            if (strcmp(g_ausentes[i], path) == 0) return true;
         return false;
     }
 
-    void MarcarAusente(const char* caminho)
+    void MarcarAusente(const char* path)
     {
         if (g_totalAusentes >= kMaxAusentes) return;
-        if (strlen(caminho) >= sizeof(g_ausentes[0])) return;
-        strcpy(g_ausentes[g_totalAusentes++], caminho);
+        if (strlen(path) >= sizeof(g_ausentes[0])) return;
+        strcpy(g_ausentes[g_totalAusentes++], path);
     }
 
     // Rastro de cada tentativa. Deixar LIGADO custa caro -- sao milhares de
@@ -90,19 +90,19 @@ namespace
     long g_bytesLiberados = 0;
     int  g_arquivosLiberados = 0;
 
-    void LembrarNoMemfs(const char* caminho)
+    void LembrarNoMemfs(const char* path)
     {
-        if (strlen(caminho) >= sizeof(g_anel[0])) return;
+        if (strlen(path) >= sizeof(g_anel[0])) return;
 
         // A posicao que vamos ocupar guarda o mais antigo: apaga antes de sobrescrever.
         if (g_anelCheio && g_anel[g_anelProximo][0] != '\0')
         {
             const int liberados = EM_ASM_INT({
-                var caminho = UTF8ToString($0);
+                var path = UTF8ToString($0);
                 try {
-                    var tamanho = FS.stat(caminho).size;
-                    FS.unlink(caminho);
-                    return tamanho;
+                    var size = FS.stat(path).size;
+                    FS.unlink(path);
+                    return size;
                 } catch (e) { return 0; }
             }, g_anel[g_anelProximo]);
             if (liberados > 0)
@@ -112,30 +112,30 @@ namespace
             }
         }
 
-        strcpy(g_anel[g_anelProximo], caminho);
+        strcpy(g_anel[g_anelProximo], path);
         g_anelProximo = (g_anelProximo + 1) % kAnelMemfs;
         if (g_anelProximo == 0) g_anelCheio = true;
     }
 
-    bool BuscarSincrono(const char* caminho)
+    bool BuscarSincrono(const char* path)
     {
         if (kRastrearTentativas ||
             (kRastrearAPartirDe > 0 && g_buscados >= kRastrearAPartirDe))
-            emscripten_log(EM_LOG_ERROR, "tentando: %s", caminho);
+            emscripten_log(EM_LOG_ERROR, "tentando: %s", path);
 
         // Rastro FILTRADO: so os caminhos que contem esta substring. Rastrear
         // tudo afoga o log e o proprio custo do log domina a medicao; filtrar por
         // subsistema mantem o volume baixo e a informacao util. Nulo desliga.
         const char* kFiltroRastro = 0;
-        if (kFiltroRastro != 0 && strstr(caminho, kFiltroRastro) != 0)
-            emscripten_log(EM_LOG_ERROR, "mundo95: %s", caminho);
-        if (JaFalhou(caminho)) return false;
+        if (kFiltroRastro != 0 && strstr(path, kFiltroRastro) != 0)
+            emscripten_log(EM_LOG_ERROR, "mundo95: %s", path);
+        if (JaFalhou(path)) return false;
 
         // O caminho virtual do MEMFS e o mesmo da URL: os assets sao servidos a
         // partir da raiz da pagina, na mesma arvore Data/... que o jogo monta.
         const int bytes = EM_ASM_INT({
-            var caminho = UTF8ToString($0);
-            var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho;
+            var path = UTF8ToString($0);
+            var url = path.charAt(0) === '/' ? path.substring(1) : path;
             var xhr = new XMLHttpRequest();
             xhr.open('GET', url, false);
             // responseType nao pode ser definido em requisicao sincrona na thread
@@ -146,33 +146,33 @@ namespace
             if (xhr.status !== 200 && xhr.status !== 0) return -1;
 
             var texto = xhr.responseText;
-            var dados = new Uint8Array(texto.length);
+            var data = new Uint8Array(texto.length);
             for (var i = 0; i < texto.length; ++i)
-                dados[i] = texto.charCodeAt(i) & 0xFF;
+                data[i] = texto.charCodeAt(i) & 0xFF;
 
-            var barra = caminho.lastIndexOf('/');
+            var barra = path.lastIndexOf('/');
             if (barra > 0) {
-                try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {}
+                try { FS.mkdirTree(path.substring(0, barra)); } catch (e) {}
             }
             // -2 distingue falha de GRAVACAO de falha de rede (-1), e a mensagem do
             // erro e impressa: engolir a excecao fazia toda falha parecer "arquivo
             // ausente", e foi assim que um esgotamento de memoria passou por asset
             // faltando.
             try {
-                FS.writeFile(caminho, dados);
+                FS.writeFile(path, data);
             } catch (e) {
-                err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e);
+                err('[assets] FS.writeFile falhou em ' + path + ': ' + e);
                 return -2;
             }
-            return dados.length;
-        }, caminho);
+            return data.length;
+        }, path);
 
         if (bytes == -2)
         {
             // Nao entra no cache negativo: a rede trouxe o arquivo, o que faltou foi
             // espaco. Marcar como ausente esconderia o problema e impediria uma nova
             // tentativa depois de o anel liberar memoria.
-            emscripten_log(EM_LOG_ERROR, "  gravacao falhou: %s", caminho);
+            emscripten_log(EM_LOG_ERROR, "  gravacao falhou: %s", path);
             return false;
         }
 
@@ -185,26 +185,26 @@ namespace
             // nunca apareciam. Um corte silencioso num log de diagnostico faz a
             // lista parecer completa quando nao e.
             if (g_totalAusentes < kMaxAusentes)
-                emscripten_log(EM_LOG_ERROR, "  ausente: %s", caminho);
+                emscripten_log(EM_LOG_ERROR, "  ausente: %s", path);
             else if (g_totalAusentes == kMaxAusentes)
                 emscripten_log(EM_LOG_ERROR, "  ausente: (limite de %d atingido; "
                                "os proximos nao serao listados)", kMaxAusentes);
-            MarcarAusente(caminho);
+            MarcarAusente(path);
             return false;
         }
         ++g_buscados;
         g_bytesBuscados += bytes;
-        LembrarNoMemfs(caminho);
+        LembrarNoMemfs(path);
 
         // Sinal de progresso durante cargas longas. Sem isto, uma carga que
         // trava e indistinguivel de uma que so esta demorando: as duas mostram
         // uma aba parada.
         if ((g_buscados % 100) == 0)
         {
-            char linha[300];
-            snprintf(linha, sizeof(linha), "  ... %d arquivos (%.1f MB), ultimo: %s",
-                     g_buscados, g_bytesBuscados / (1024.0 * 1024.0), caminho);
-            emscripten_log(EM_LOG_ERROR, "%s", linha);
+            char line[300];
+            snprintf(line, sizeof(line), "  ... %d arquivos (%.1f MB), ultimo: %s",
+                     g_buscados, g_bytesBuscados / (1024.0 * 1024.0), path);
+            emscripten_log(EM_LOG_ERROR, "%s", line);
         }
         return true;
     }
@@ -219,12 +219,12 @@ namespace Platform
 
     void RelatarBuscaSobDemanda(void (*log)(const char*))
     {
-        char linha[200];
-        snprintf(linha, sizeof(linha),
+        char line[200];
+        snprintf(line, sizeof(line),
                  "assets sob demanda: %d arquivos, %.1f MB (%d ausentes em cache; "
                  "%d liberados do MEMFS, %.1f MB)",
                  g_buscados, g_bytesBuscados / (1024.0 * 1024.0), g_totalAusentes,
                  g_arquivosLiberados, g_bytesLiberados / (1024.0 * 1024.0));
-        log(linha);
+        log(line);
     }
 }

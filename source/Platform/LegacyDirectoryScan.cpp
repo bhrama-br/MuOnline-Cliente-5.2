@@ -36,10 +36,10 @@
 
 namespace
 {
-    struct VarreduraDeDiretorio
+    struct DirectoryScan
     {
-        DIR* diretorio;
-        char caminho[1024];   // diretorio ja resolvido, com barra no fim
+        DIR* directory;
+        char path[1024];   // diretorio ja resolvido, com barra no fim
         char padrao[256];     // so a parte depois da ultima barra
     };
 
@@ -69,17 +69,17 @@ namespace
         return Casa(padrao + 1, nome + 1);
     }
 
-    bool ENomeDeDiretorio(const VarreduraDeDiretorio& varredura, const struct dirent* entrada)
+    bool EDirectoryName(const DirectoryScan& varredura, const struct dirent* entry)
     {
 #ifdef DT_DIR
-        if (entrada->d_type == DT_DIR) return true;
-        if (entrada->d_type != DT_UNKNOWN) return false;
+        if (entry->d_type == DT_DIR) return true;
+        if (entry->d_type != DT_UNKNOWN) return false;
 #endif
         // d_type nao e obrigatorio no POSIX, e o MEMFS do Emscripten nem sempre o
         // preenche: cair para stat mantem o bit correto em qualquer caso.
         char completo[1024];
         if (snprintf(completo, sizeof(completo), "%s%s",
-                     varredura.caminho, entrada->d_name) >= (int)sizeof(completo))
+                     varredura.path, entry->d_name) >= (int)sizeof(completo))
             return false;
         struct stat info;
         if (stat(completo, &info) != 0) return false;
@@ -87,20 +87,20 @@ namespace
     }
 
     // Avanca ate a proxima entrada que case com o padrao. Devolve false no fim.
-    bool ProximaEntrada(VarreduraDeDiretorio& varredura, LPWIN32_FIND_DATA dados)
+    bool NextEntry(DirectoryScan& varredura, LPWIN32_FIND_DATA data)
     {
-        for (struct dirent* entrada = readdir(varredura.diretorio);
-             entrada != NULL;
-             entrada = readdir(varredura.diretorio))
+        for (struct dirent* entry = readdir(varredura.directory);
+             entry != NULL;
+             entry = readdir(varredura.directory))
         {
-            if (strcmp(entrada->d_name, ".") == 0 || strcmp(entrada->d_name, "..") == 0)
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
-            if (!Casa(varredura.padrao, entrada->d_name)) continue;
+            if (!Casa(varredura.padrao, entry->d_name)) continue;
 
-            const size_t tamanho = strlen(entrada->d_name);
-            if (tamanho + 1 > sizeof(dados->cFileName)) continue;
-            memcpy(dados->cFileName, entrada->d_name, tamanho + 1);
-            dados->dwFileAttributes = ENomeDeDiretorio(varredura, entrada)
+            const size_t size = strlen(entry->d_name);
+            if (size + 1 > sizeof(data->cFileName)) continue;
+            memcpy(data->cFileName, entry->d_name, size + 1);
+            data->dwFileAttributes = EDirectoryName(varredura, entry)
                                     ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_ARCHIVE;
             return true;
         }
@@ -108,61 +108,61 @@ namespace
     }
 }
 
-HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA dados)
+HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA data)
 {
-    if (padraoCompleto == NULL || dados == NULL) return INVALID_HANDLE_VALUE;
+    if (padraoCompleto == NULL || data == NULL) return INVALID_HANDLE_VALUE;
 
     char normalizado[1024];
     Platform::NormalizeLegacyPath(padraoCompleto, normalizado, sizeof(normalizado));
 
     // Separa diretorio e padrao na ULTIMA barra. Sem barra, o diretorio e o corrente.
-    char diretorio[1024];
+    char directory[1024];
     const char* padrao = normalizado;
-    const char* ultimaBarra = strrchr(normalizado, '/');
-    if (ultimaBarra != NULL)
+    const char* lastSlash = strrchr(normalizado, '/');
+    if (lastSlash != NULL)
     {
-        const size_t tamanho = (size_t)(ultimaBarra - normalizado) + 1;   // inclui a barra
-        if (tamanho + 1 > sizeof(diretorio)) return INVALID_HANDLE_VALUE;
-        memcpy(diretorio, normalizado, tamanho);
-        diretorio[tamanho] = '\0';
-        padrao = ultimaBarra + 1;
+        const size_t size = (size_t)(lastSlash - normalizado) + 1;   // inclui a barra
+        if (size + 1 > sizeof(directory)) return INVALID_HANDLE_VALUE;
+        memcpy(directory, normalizado, size);
+        directory[size] = '\0';
+        padrao = lastSlash + 1;
     }
     else
     {
-        diretorio[0] = '.';
-        diretorio[1] = '/';
-        diretorio[2] = '\0';
+        directory[0] = '.';
+        directory[1] = '/';
+        directory[2] = '\0';
     }
 
     // `FindFirstFile("pasta\\")` sem padrao nenhum lista tudo, como no Win32.
     if (*padrao == '\0') padrao = "*";
 
-    DIR* aberto = opendir(diretorio);
+    DIR* aberto = opendir(directory);
     if (aberto == NULL)
     {
         // Mesma tolerancia de caixa da abertura de arquivo: o codigo legado escreve
         // "Data\\Configs\\..." e o disco pode ter outra capitalizacao.
         char resolvido[1024];
-        if (!Platform::ResolveLegacyCasePath(diretorio, resolvido, sizeof(resolvido)))
+        if (!Platform::ResolveLegacyCasePath(directory, resolvido, sizeof(resolvido)))
             return INVALID_HANDLE_VALUE;
         aberto = opendir(resolvido);
         if (aberto == NULL) return INVALID_HANDLE_VALUE;
-        const size_t tamanho = strlen(resolvido);
-        if (tamanho + 2 > sizeof(diretorio)) { closedir(aberto); return INVALID_HANDLE_VALUE; }
-        memcpy(diretorio, resolvido, tamanho + 1);
-        if (tamanho > 0 && diretorio[tamanho - 1] != '/')
+        const size_t size = strlen(resolvido);
+        if (size + 2 > sizeof(directory)) { closedir(aberto); return INVALID_HANDLE_VALUE; }
+        memcpy(directory, resolvido, size + 1);
+        if (size > 0 && directory[size - 1] != '/')
         {
-            diretorio[tamanho] = '/';
-            diretorio[tamanho + 1] = '\0';
+            directory[size] = '/';
+            directory[size + 1] = '\0';
         }
     }
 
-    VarreduraDeDiretorio* varredura = new VarreduraDeDiretorio();
-    varredura->diretorio = aberto;
-    snprintf(varredura->caminho, sizeof(varredura->caminho), "%s", diretorio);
+    DirectoryScan* varredura = new DirectoryScan();
+    varredura->directory = aberto;
+    snprintf(varredura->path, sizeof(varredura->path), "%s", directory);
     snprintf(varredura->padrao, sizeof(varredura->padrao), "%s", padrao);
 
-    if (!ProximaEntrada(*varredura, dados))
+    if (!NextEntry(*varredura, data))
     {
         // Nenhuma entrada casa: o Win32 devolve INVALID_HANDLE_VALUE, e nao um handle
         // que falha no primeiro FindNextFile.
@@ -173,18 +173,18 @@ HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA dados)
     return (HANDLE)varredura;
 }
 
-BOOL FindNextFile(HANDLE handle, LPWIN32_FIND_DATA dados)
+BOOL FindNextFile(HANDLE handle, LPWIN32_FIND_DATA data)
 {
-    if (handle == INVALID_HANDLE_VALUE || handle == NULL || dados == NULL) return FALSE;
-    VarreduraDeDiretorio* varredura = (VarreduraDeDiretorio*)handle;
-    return ProximaEntrada(*varredura, dados) ? TRUE : FALSE;
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL || data == NULL) return FALSE;
+    DirectoryScan* varredura = (DirectoryScan*)handle;
+    return NextEntry(*varredura, data) ? TRUE : FALSE;
 }
 
 BOOL FindClose(HANDLE handle)
 {
     if (handle == INVALID_HANDLE_VALUE || handle == NULL) return FALSE;
-    VarreduraDeDiretorio* varredura = (VarreduraDeDiretorio*)handle;
-    if (varredura->diretorio != NULL) closedir(varredura->diretorio);
+    DirectoryScan* varredura = (DirectoryScan*)handle;
+    if (varredura->directory != NULL) closedir(varredura->directory);
     delete varredura;
     return TRUE;
 }

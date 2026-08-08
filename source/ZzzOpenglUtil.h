@@ -127,7 +127,7 @@ float RenderNumber2D(float x,float y,int Num,float Width,float Height);
 // Liga/desliga texturizacao. No pipeline fixo isso e glEnable(GL_TEXTURE_2D);
 // no GLES3 quem decide e o shader, via adapter. Passar pelo ponto central evita
 // que o estado se perca em silencio numa das plataformas.
-void GetLegacyColor4f(float* destino);
+void GetLegacyColor4f(float* destination);
 void SetLegacyTexture2D(bool enabled);
 void SetLegacyDepthTest(bool enabled);
 void SetLegacyAlphaTest(bool enabled);

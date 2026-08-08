@@ -71,7 +71,7 @@ var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIR
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\paulo\AppData\Local\Temp\tmpp7z9ttyh.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmp6wja8_dt.js
 
   if (!Module['expectedDataFileDownloads']) Module['expectedDataFileDownloads'] = 0;
   Module['expectedDataFileDownloads']++;
@@ -226,21 +226,21 @@ Module['FS_createPath']("/Data", "World10", true, true);
 
   })();
 
-// end include: C:\Users\paulo\AppData\Local\Temp\tmpp7z9ttyh.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmpmokubas8.js
+// end include: C:\Users\paulo\AppData\Local\Temp\tmp6wja8_dt.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmpcjxw20d8.js
 
     // All the pre-js content up to here must remain later on, we need to run
     // it.
     if ((typeof ENVIRONMENT_IS_WASM_WORKER != 'undefined' && ENVIRONMENT_IS_WASM_WORKER) || (typeof ENVIRONMENT_IS_PTHREAD != 'undefined' && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != 'undefined' && ENVIRONMENT_IS_AUDIO_WORKLET)) Module['preRun'] = [];
     var necessaryPreJSTasks = Module['preRun'].slice();
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmpmokubas8.js
-// include: C:\Users\paulo\AppData\Local\Temp\tmp04e5efqg.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmpcjxw20d8.js
+// include: C:\Users\paulo\AppData\Local\Temp\tmp83b5a_l1.js
 
     if (!Module['preRun']) throw 'Module.preRun should exist because file support used it; did a pre-js delete it?';
     necessaryPreJSTasks.forEach((task) => {
       if (Module['preRun'].indexOf(task) < 0) throw 'All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?';
     });
-  // end include: C:\Users\paulo\AppData\Local\Temp\tmp04e5efqg.js
+  // end include: C:\Users\paulo\AppData\Local\Temp\tmp83b5a_l1.js
 
 
 var programArgs = [];
@@ -8283,10 +8283,10 @@ var ASM_CONSTS = {
  212715: () => { var audio = Module.muAudio; if (!audio) return; for (var slot in audio.active) { var list = audio.active[slot]; for (var i = 0; i < list.length; ++i) { try { list[i].stop(0); } catch (e) {} } audio.active[slot] = []; } },  
  212938: ($0, $1) => { var audio = Module.muAudio; if (audio && audio.gains[$0]) audio.gains[$0].gain.value = $1; },  
  213033: () => { try { if (!Module.muAudio) { var Context = window.AudioContext || window.webkitAudioContext; if (!Context) return 0; var audio = {}; audio.context = new Context(); audio.buffers = {}; audio.gains = {}; audio.active = {}; Module.muAudio = audio; } return 1; } catch (e) { return 0; } },  
- 213320: ($0) => { var caminho = UTF8ToString($0); var url = caminho.charAt(0) === '/' ? caminho.substring(1) : caminho; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var dados = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) dados[i] = texto.charCodeAt(i) & 0xFF; var barra = caminho.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(caminho.substring(0, barra)); } catch (e) {} } try { FS.writeFile(caminho, dados); } catch (e) { err('[assets] FS.writeFile falhou em ' + caminho + ': ' + e); return -2; } return dados.length; },  
- 214068: ($0) => { var caminho = UTF8ToString($0); try { var tamanho = FS.stat(caminho).size; FS.unlink(caminho); return tamanho; } catch (e) { return 0; } },  
- 214209: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var fila = sock.recv_queue ? sock.recv_queue.length : 0; if (fila > 0) return fila; var chave = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[chave] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
- 214630: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
+ 213320: ($0) => { var path = UTF8ToString($0); var url = path.charAt(0) === '/' ? path.substring(1) : path; var xhr = new XMLHttpRequest(); xhr.open('GET', url, false); xhr.overrideMimeType('text/plain; charset=x-user-defined'); try { xhr.send(null); } catch (e) { return -1; } if (xhr.status !== 200 && xhr.status !== 0) return -1; var texto = xhr.responseText; var data = new Uint8Array(texto.length); for (var i = 0; i < texto.length; ++i) data[i] = texto.charCodeAt(i) & 0xFF; var barra = path.lastIndexOf('/'); if (barra > 0) { try { FS.mkdirTree(path.substring(0, barra)); } catch (e) {} } try { FS.writeFile(path, data); } catch (e) { err('[assets] FS.writeFile falhou em ' + path + ': ' + e); return -2; } return data.length; },  
+ 214040: ($0) => { var path = UTF8ToString($0); try { var size = FS.stat(path).size; FS.unlink(path); return size; } catch (e) { return 0; } },  
+ 214166: ($0) => { var stream = FS.streams[$0]; var sock = stream && stream.node && stream.node.sock; if (!sock) return -2; var queue = sock.recv_queue ? sock.recv_queue.length : 0; if (queue > 0) return queue; var key = sock.daddr + ":" + sock.dport; var peer = sock.peers ? sock.peers[key] : undefined; if (!peer || !peer.socket) return -1; var estado = peer.socket.readyState; if (estado === 2 || estado === 3) return -1; return 0; },  
+ 214586: ($0) => { try { var handle = window.open(UTF8ToString($0), '_blank'); if (!handle) return 0; try { handle.opener = null; } catch (e) {} return 1; } catch (e) { return 0; } }
 };
 
 // Imports from the Wasm binary.

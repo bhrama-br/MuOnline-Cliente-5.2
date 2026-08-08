@@ -95,7 +95,7 @@ int CSimpleModulus::DecryptBlock(void* lpTarget, void* lpSource)
 int CSimpleModulus::AddBits(void* lpBuffer, int nNumBufferBits, void* lpBits,
                             int nInitialBit, int nNumBits)
 {
-    return AdicionarBits((u8*)lpBuffer, nNumBufferBits, (const u8*)lpBits,
+    return AppendBits((u8*)lpBuffer, nNumBufferBits, (const u8*)lpBits,
                          nInitialBit, nNumBits);
 }
 
@@ -116,17 +116,17 @@ BOOL CSimpleModulus::LoadKeyFromBuffer(BYTE* pbyBuffer, BOOL bMod, BOOL bEnc, BO
     if (pbyBuffer == NULL) return FALSE;
 
     DWORD modulus[SIZE_ENCRYPTION_KEY];
-    DWORD chave[SIZE_ENCRYPTION_KEY];
-    DWORD chaveXor[SIZE_ENCRYPTION_KEY];
+    DWORD key[SIZE_ENCRYPTION_KEY];
+    DWORD keyXor[SIZE_ENCRYPTION_KEY];
 
-    if (!LerChaves(pbyBuffer, kBytesChave, (u32*)modulus, (u32*)chave, (u32*)chaveXor))
+    if (!ReadKeys(pbyBuffer, kKeyBytes, (u32*)modulus, (u32*)key, (u32*)keyXor))
         return FALSE;
 
     if (bMod) memcpy(m_dwModulus, modulus, sizeof(m_dwModulus));
-    if (bXOR) memcpy(m_dwXORKey, chaveXor, sizeof(m_dwXORKey));
+    if (bXOR) memcpy(m_dwXORKey, keyXor, sizeof(m_dwXORKey));
     // O bloco do meio e a chave de cifragem OU de decifragem, conforme o arquivo.
-    if (bEnc) memcpy(m_dwEncryptionKey, chave, sizeof(m_dwEncryptionKey));
-    if (bDec) memcpy(m_dwDecryptionKey, chave, sizeof(m_dwDecryptionKey));
+    if (bEnc) memcpy(m_dwEncryptionKey, key, sizeof(m_dwEncryptionKey));
+    if (bDec) memcpy(m_dwDecryptionKey, key, sizeof(m_dwDecryptionKey));
     return TRUE;
 }
 
@@ -136,15 +136,15 @@ BOOL CSimpleModulus::LoadKey(char* lpszFileName, unsigned short sID,
     (void)sID;   // LerChaves ja confere o identificador do arquivo.
     if (lpszFileName == NULL) return FALSE;
 
-    FILE* arquivo = Platform::LegacyFileOpen(lpszFileName, "rb");
-    if (arquivo == NULL) return FALSE;
+    FILE* file = Platform::LegacyFileOpen(lpszFileName, "rb");
+    if (file == NULL) return FALSE;
 
     BYTE conteudo[128];
     memset(conteudo, 0, sizeof(conteudo));
-    const size_t lidos = fread(conteudo, 1, sizeof(conteudo), arquivo);
-    fclose(arquivo);
+    const size_t lidos = fread(conteudo, 1, sizeof(conteudo), file);
+    fclose(file);
 
-    if (lidos < (size_t)kBytesChave) return FALSE;
+    if (lidos < (size_t)kKeyBytes) return FALSE;
     return LoadKeyFromBuffer(conteudo, bMod, bEnc, bDec, bXOR);
 }
 

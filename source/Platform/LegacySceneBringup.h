@@ -44,9 +44,9 @@ namespace Platform
     // da Season 13. Definida em LegacyLuaSubsystems.cpp; idempotente.
     void InicializarSubsistemasDeScript();
 
-    bool CriarCenaDeTitulo(int larguraTela, int alturaTela);
+    bool CreateTitleScene(int screenWidth, int screenHeight);
     bool CenaDeTituloPronta();
-    bool CarregarDadosBasicos();
+    bool LoadBasicData();
     bool CarregarInterfacePrincipal();
     bool EntrarNaCenaDeLogin();
 
@@ -57,5 +57,5 @@ namespace Platform
     // cenas. Quando esse bloco vivia dentro do ramo da tela de titulo, entrar na
     // cena de login pulava a correcao e a resolucao voltava ao padrao da area de
     // desenho -- o mesmo defeito apareceu duas vezes, com sintomas diferentes.
-    void DesenharQuadroLegado(int larguraTela, int alturaTela);
+    void DrawLegacyFrame(int screenWidth, int screenHeight);
 }

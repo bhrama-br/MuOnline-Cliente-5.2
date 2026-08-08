@@ -166,6 +166,7 @@ bool MoveBug ( OBJECT* o, bool bForceRender )
 		BMD* b = &Models[o->Type];
 
 		VectorCopy(o->Owner->Position, TargetPosition);
+		b->PlayAnimation(&o->AnimationFrame, &o->PriorAnimationFrame, &o->PriorAction, o->Velocity, o->Position, o->Angle);
 
 		switch (o->Type)
 		{

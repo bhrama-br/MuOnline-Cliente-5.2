@@ -8452,8 +8452,15 @@ void RenderCharacter(CHARACTER *c,OBJECT *o,int Select) //CreateCape
 		}
 	}
 
-    if ( byRender==CHARACTER_ANIMATION )
-        Calc_ObjectAnimation ( o, Translate, Select );
+	// Pose + corpo do personagem. Separado do equipamento porque um player carrega
+	// ~15 malhas de parte contra 1 de corpo, e a Fase 2 ja mostrou que o custo NAO
+	// esta no laco por vertice — resta saber se esta aqui ou nas partes.
+	if ( byRender==CHARACTER_ANIMATION )
+	{
+		const long long poseStartUs = FrameLoopNowMicroseconds();
+		Calc_ObjectAnimation ( o, Translate, Select );
+		RecordCharPoseUs(FrameLoopNowMicroseconds() - poseStartUs);
+	}
 
     if ( o->Alpha>=0.5f && c->HideShadow==false )
     {
@@ -8470,13 +8477,19 @@ void RenderCharacter(CHARACTER *c,OBJECT *o,int Select) //CreateCape
                 }
             }
             o->EnableShadow = true;
+            const long long shadowStartUs = FrameLoopNowMicroseconds();
             RenderPartObject(&c->Object,MODEL_SHADOW_BODY,NULL,c->Light,o->Alpha,0,0,0,false,false,Translate);
+            RecordCharShadowUs(FrameLoopNowMicroseconds() - shadowStartUs);
             o->EnableShadow = false;
         }
     }
 
     if ( byRender==CHARACTER_RENDER_OBJ )
 	{
+		// Mesmo bucket que Calc_ObjectAnimation: e o corpo do monstro (pose +
+		// malha). Monstro nao tem partes de equipamento, entao para ele
+		// us_char_pose tende a ser quase todo o us_characters.
+		const long long poseStartUs = FrameLoopNowMicroseconds();
 		if(67==c->MonsterIndex || 74==c->MonsterIndex || 75==c->MonsterIndex
 			|| 135==c->MonsterIndex || 136==c->MonsterIndex || 137==c->MonsterIndex
 			|| 300==c->MonsterIndex || 301==c->MonsterIndex || 302==c->MonsterIndex || 303==c->MonsterIndex
@@ -8496,6 +8509,7 @@ void RenderCharacter(CHARACTER *c,OBJECT *o,int Select) //CreateCape
 				RenderObject ( o, Translate,Select, 0);
 			}
 		}
+		RecordCharPoseUs(FrameLoopNowMicroseconds() - poseStartUs);
 	}
 
 	if ( ( 

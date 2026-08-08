@@ -55,8 +55,8 @@ bool CLuaDecrypt::LoadFile(char* path) // OK
 		fclose(file);
 		return 0;
 	}
-	const long tamanho = ftell(file);
-	if (tamanho < 0)
+	const long size = ftell(file);
+	if (size < 0)
 	{
 		fclose(file);
 		return 0;
@@ -73,7 +73,7 @@ bool CLuaDecrypt::LoadFile(char* path) // OK
 		this->m_buff = 0;
 	}
 
-	this->m_size = (DWORD)tamanho;
+	this->m_size = (DWORD)size;
 	this->m_buff = (char*)malloc(this->m_size > 0 ? this->m_size : 1);
 	if (this->m_buff == 0)
 	{

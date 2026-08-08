@@ -280,13 +280,13 @@ bool SEASON3B::CNewUIHotKey::UpdateKeyEvent()
 		PlayBuffer(SOUND_CLICK01);
 		return false;
 	}
-	//else if(SEASON3B::IsPress('M') == true)
-	//{
-	//	g_pNewUISystem->Toggle(SEASON3B::INTERFACE_MOVEMAP);
-	//	PlayBuffer(SOUND_CLICK01);
-	//
-	//	return false;
-	//}
+	else if(SEASON3B::IsPress('M') == true)
+	{
+		g_pNewUISystem->Toggle(SEASON3B::INTERFACE_MOVEMAP);
+		PlayBuffer(SOUND_CLICK01);
+	
+		return false;
+	}
 	else if(SEASON3B::IsPress(VK_TAB) == true && gMapManager.InBattleCastle() == true )
 	{
 		g_pNewUISystem->Toggle( SEASON3B::INTERFACE_SIEGEWARFARE );

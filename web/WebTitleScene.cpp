@@ -17,20 +17,20 @@ namespace
         emscripten_log(EM_LOG_ERROR, "%s", mensagem);
     }
 
-    void TamanhoDoCanvas(int& largura, int& altura)
+    void TamanhoDoCanvas(int& width, int& height)
     {
-        largura = 0;
-        altura = 0;
-        emscripten_get_canvas_element_size("#canvas", &largura, &altura);
+        width = 0;
+        height = 0;
+        emscripten_get_canvas_element_size("#canvas", &width, &height);
     }
 }
 
 namespace Platform
 {
-    bool CreateLegacyTitleScene(int larguraTela, int alturaTela)
+    bool CreateLegacyTitleScene(int screenWidth, int screenHeight)
     {
         SetLegacySceneLogger(&LogWeb);
-        return CriarCenaDeTitulo(larguraTela, alturaTela);
+        return CreateTitleScene(screenWidth, screenHeight);
     }
 
     bool IsLegacyTitleSceneReady()
@@ -43,8 +43,8 @@ namespace Platform
         // O canvas so ganha o tamanho real depois do primeiro quadro, e muda
         // quando a janela e redimensionada -- por isso e consultado a cada quadro
         // em vez de uma vez na inicializacao.
-        int largura = 0, altura = 0;
-        TamanhoDoCanvas(largura, altura);
-        DesenharQuadroLegado(largura, altura);
+        int width = 0, height = 0;
+        TamanhoDoCanvas(width, height);
+        DrawLegacyFrame(width, height);
     }
 }

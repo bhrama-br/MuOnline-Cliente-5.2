@@ -114,10 +114,62 @@ enum RenderPhaseId
 	RenderPhaseSetup,
 	RenderPhaseFrustum,
 	RenderPhaseMisc,
+
+	// A v14 deixou ~640 us tipicos em us_unmeasured, e a leitura do codigo mostrou
+	// exatamente o que estava la: o segundo passe de agua (que refaz efeitos e
+	// sprites inteiros), o bloco de UI/2D, e o preparo de frame. Estes tres levam
+	// us_unmeasured para perto de zero, que e a condicao para parar de adivinhar.
+	RenderPhaseWater,
+	RenderPhaseUi,
+	RenderPhaseFrameBegin,
+
+	// Marcador: tudo acima acontece DENTRO da janela de cpu_us e soma exatamente
+	// cpu_us. Somente estas entram na subtracao de us_unmeasured.
+	RenderPhaseInsideCount,
+
+	// A v14 mostrou frame_total_us - cpu_us entre 0,4 e 4,1 ms, e em world 3 o
+	// frame cresceu 50% com cpu_us constante: toda a variacao estava aqui. Estes
+	// quatro blocos cobrem o intervalo entre a leitura do CSV e o topo do frame
+	// seguinte. Ficam FORA de cpu_us de proposito — mover a janela invalidaria a
+	// comparacao com todas as capturas anteriores.
+	RenderPhaseOverlay = RenderPhaseInsideCount,
+	RenderPhasePresent,
+	RenderPhaseProtocol,
+	RenderPhasePump,
+	// Sleep do limitador de FPS. Sem coluna propria ele cairia em us_frame_gap, que
+	// a documentacao manda ler como "sobrou caminho sem instrumento" -- entao um
+	// -fpslimit=60 numa maquina de 170 FPS produziria ~10 ms de gap que sao espera
+	// deliberada, e mandaria o leitor cacar trabalho que nao existe.
+	RenderPhaseLimiter,
+	RenderPhaseOutsideCount,
+
+	// Terceira regiao: DETALHE. Estas ANINHAM dentro de us_characters, logo
+	// sobrepoem valores ja contados. Nao entram em nenhuma das duas somas — sao
+	// informativas. us_characters e 33,7% do frame e a maior fatia medida; a
+	// Fase 2 provou que nao e o laco por vertice, entao a pergunta que sobra e
+	// "corpo ou equipamento?".
+	RenderPhaseCharPose = RenderPhaseOutsideCount,
+	RenderPhaseCharShadow,
+
+	// Detalhe de us_simulation, o segundo maior bloco em Lorencia (15,2%) e o
+	// MAIOR de todos em world 3 (1.440 us, acima de us_characters). Nenhuma das
+	// cinco fases do plano original olhou para ele: nao e render, e logica de
+	// jogo. Tambem aninham — o resto sai por subtracao.
+	RenderPhaseSimUi,
+	RenderPhaseSimObjects,
+	RenderPhaseSimChars,
+	RenderPhaseSimEffects,
 	RenderPhaseCount
 };
 
 static long long g_renderPhaseUs[RenderPhaseCount] = { 0 };
+
+// As fases pos-cpu_us acontecem depois de CaptureRenderStatsCsv ter lido o
+// array, e antes do memset do frame seguinte. Sem este acumulador separado elas
+// seriam zeradas antes de qualquer leitura. O topo de RenderScene transfere
+// pending -> phase, entao o CSV le sempre o frame anterior nessas quatro
+// colunas. Um frame de atraso nao muda uma media de 120.
+static long long g_pendingPhaseUs[RenderPhaseCount] = { 0 };
 
 // Tempo gasto nas leituras sincronas de matriz (glGetFloatv) em ZzzOpenglUtil.
 // Elas drenam o pipeline do driver e sao o principal suspeito do custo de setup.
@@ -128,19 +180,107 @@ extern unsigned long long g_matrixReadbackCalls;
 extern float g_cpuMatrixMaxDivergence;
 // Escala do viewport 3D em porcento (diagnostico de fill rate).
 extern int g_renderScalePercent;
+// Efeitos vivos no frame (ZzzEffect.cpp). Pool de 200; cada um e malha com alpha.
+extern int g_liveEffects;
+// Rastros da Twisting Slash vivos, e o limite opcional (-wheeltrail=N, -1 = sem
+// limite). Cada rastro custa um modelo de arma animado por frame.
+extern int g_liveWheelTrails;
+extern int g_wheelTrailCap;
 // Periodo real do frame, medido de topo a topo de RenderScene: inclui
 // SwapBuffers E o sleep do limitador. Sem ele nao da para saber se o jogo
 // esta no teto de FPS — e, se estiver, nenhuma otimizacao muda o FPS aqui.
 static long long g_frameTopPrevUs = 0;
 static long long g_frameTotalUs = 0;
 
+// Swap interval efetivamente aplicado: -1 = default do driver (nao configurado),
+// 0 = vsync off, 1 = vsync on. Ate a v14 o codigo nunca chamava
+// wglSwapIntervalEXT, entao o teto de FPS de cada maquina vinha do painel do
+// driver e a medicao nao era comparavel entre PCs. Registrado no CSV.
+int g_vsyncInterval = -1;
+
+// RenderCharacter tambem e chamado de CharMakeWin.cpp:444 (criacao de personagem) e
+// UIWindows.cpp:1830, os dois FORA da fase Characters. Sem este guarda, o pose/shadow
+// desses caminhos entraria nas colunas de detalhe sem contribuir para us_characters, e
+// us_char_parts — que sai por subtracao — ficaria negativo e seria truncado em zero.
+// Corrupcao silenciosa exatamente na coluna que a rodada existe para produzir.
+static int g_charactersPhaseDepth = 0;
+
+// As 13 fases de dentro de cpu_us tem que ser mutuamente exclusivas: se duas se
+// aninharem, o mesmo tempo entra em duas colunas e us_unmeasured — que sai por
+// subtracao — afunda ou trava em zero, sem nenhum sinal. As fronteiras foram
+// escolhidas a mao em tres funcoes diferentes, entao "eu conferi" nao e garantia.
+// Este contador transforma o risco em coluna: phase_nesting != 0 significa que a
+// reparticao de cpu_us daquela captura NAO e confiavel.
+static int g_insidePhaseDepth = 0;
+static long long g_phaseNestingViolations = 0;
+
 struct ScopedRenderPhase
 {
-	explicit ScopedRenderPhase(RenderPhaseId id) : m_id(id), m_start(RenderStatsNowMicroseconds()) {}
-	~ScopedRenderPhase() { g_renderPhaseUs[m_id] += RenderStatsNowMicroseconds() - m_start; }
+	explicit ScopedRenderPhase(RenderPhaseId id) : m_id(id), m_start(RenderStatsNowMicroseconds())
+	{
+		if (id == RenderPhaseCharacters) ++g_charactersPhaseDepth;
+		if (id < RenderPhaseInsideCount)
+		{
+			if (g_insidePhaseDepth > 0) ++g_phaseNestingViolations;
+			++g_insidePhaseDepth;
+		}
+	}
+	~ScopedRenderPhase()
+	{
+		if (m_id == RenderPhaseCharacters) --g_charactersPhaseDepth;
+		if (m_id < RenderPhaseInsideCount) --g_insidePhaseDepth;
+		const long long elapsed = RenderStatsNowMicroseconds() - m_start;
+		// Somente a regiao pos-cpu_us precisa do pending: ela e medida depois de o
+		// CSV ler o array. As fases de dentro e as de detalhe acontecem antes da
+		// leitura, entao acumulam direto. Ver o comentario do enum.
+		if (m_id >= RenderPhaseInsideCount && m_id < RenderPhaseOutsideCount)
+			g_pendingPhaseUs[m_id] += elapsed;
+		else
+			g_renderPhaseUs[m_id] += elapsed;
+	}
 	RenderPhaseId m_id;
 	long long m_start;
 };
+
+// Winmain.cpp mede o pump de mensagens e o protocolo, que ficam fora de
+// RenderScene mas dentro do periodo do frame. O enum e o acumulador sao locais
+// deste arquivo, entao a contribuicao entra por funcao nomeada — sem indice
+// magico atravessando a fronteira de traducao.
+long long FrameLoopNowMicroseconds()
+{
+	return RenderStatsNowMicroseconds();
+}
+
+void RecordFrameProtocolUs(long long microseconds)
+{
+	if (microseconds > 0) g_pendingPhaseUs[RenderPhaseProtocol] += microseconds;
+}
+
+void RecordFramePumpUs(long long microseconds)
+{
+	if (microseconds > 0) g_pendingPhaseUs[RenderPhasePump] += microseconds;
+}
+
+void RecordFrameLimiterUs(long long microseconds)
+{
+	if (microseconds > 0) g_pendingPhaseUs[RenderPhaseLimiter] += microseconds;
+}
+
+// Detalhamento de us_characters, alimentado por ZzzCharacter.cpp. Aninha dentro de
+// us_characters: e sobreposicao, nao particao. `us_char_parts` nao tem funcao
+// propria — sai por subtracao no CSV, para nao precisar instrumentar as 2.400
+// linhas de equipamento de RenderCharacter uma a uma.
+void RecordCharPoseUs(long long microseconds)
+{
+	if (microseconds > 0 && g_charactersPhaseDepth > 0)
+		g_renderPhaseUs[RenderPhaseCharPose] += microseconds;
+}
+
+void RecordCharShadowUs(long long microseconds)
+{
+	if (microseconds > 0 && g_charactersPhaseDepth > 0)
+		g_renderPhaseUs[RenderPhaseCharShadow] += microseconds;
+}
 
 // `-<feature>=off|on|compare`. Ausente mantem o default compilado da fase, que
 // e Disabled ate a otimizacao ter passado pelas cenas de referencia.
@@ -1197,12 +1337,24 @@ bool NewRenderCharacterScene(HDC hDC)
 	EndBitmap();
 #endif //PJH_NEW_SERVER_SELECT_MAP
 	Height = 480;
-	Width = FrameBeginOpengl();
-    
-	glClearColor(0.f,0.f,0.f,1.f);
-	BeginOpengl(0, 25, GetWindowsX, GetWindowsY - 50);
-	
-	CreateFrustrum((float)Width/(float)640, pos);
+	{
+		ScopedRenderPhase phase(RenderPhaseFrameBegin);
+		Width = FrameBeginOpengl();
+		glClearColor(0.f,0.f,0.f,1.f);
+	}
+	// A v14 mediu 7,3 ms de CPU nesta cena para 58 draw calls — mais CPU que
+	// Lorencia inteira — com 87% em us_unmeasured, porque aqui nao havia uma unica
+	// ScopedRenderPhase. As fases reusadas sao as mesmas de MainScene de proposito:
+	// assim a cena de personagem fica comparavel coluna a coluna com o gameplay.
+	{
+		ScopedRenderPhase phase(RenderPhaseSetup);
+		BeginOpengl(0, 25, GetWindowsX, GetWindowsY - 50);
+	}
+
+	{
+		ScopedRenderPhase phase(RenderPhaseFrustum);
+		CreateFrustrum((float)Width/(float)640, pos);
+	}
 
 	OBJECT *o = &CharactersClient[SelectedHero].Object;
 
@@ -1248,21 +1400,48 @@ bool NewRenderCharacterScene(HDC hDC)
 		}
 	}
 
-	RenderTerrain(false);
-	RenderObjects();
-	RenderCharactersClient();
+	{
+		ScopedRenderPhase phase(RenderPhaseTerrain);
+		RenderTerrain(false);
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseObjects);
+		RenderObjects();
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseCharacters);
+		RenderCharactersClient();
+	}
 
-	if(!CUIMng::Instance().IsCursorOnUI())
-		SelectObjects();
+	{
+		ScopedRenderPhase phase(RenderPhaseSelect);
+		if(!CUIMng::Instance().IsCursorOnUI())
+			SelectObjects();
+	}
 
-	RenderBugs();
-	RenderBlurs();
-	RenderJoints();
-	RenderEffects();
-	ThePetProcess().RenderPets();
-	RenderBoids();
-	RenderObjects_AfterCharacter();
-	CheckSprites();
+	{
+		ScopedRenderPhase phase(RenderPhaseMisc);
+		RenderBugs();
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseEffects);
+		RenderBlurs();
+		RenderJoints();
+		RenderEffects();
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseMisc);
+		ThePetProcess().RenderPets();
+		RenderBoids();
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseObjects);
+		RenderObjects_AfterCharacter();
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseSprites);
+		CheckSprites();
+	}
 
 	if(SelectedHero!=-1 && o->Live)
 	{
@@ -1283,11 +1462,17 @@ bool NewRenderCharacterScene(HDC hDC)
 		g_csMapServer.SetHeroID ( (char *)CharactersClient[SelectedHero].ID );
 	}
 
-	BeginSprite();
-	RenderSprites();
-	RenderParticles();
-	RenderPoints();
-	EndSprite();
+	{
+		ScopedRenderPhase phase(RenderPhaseSprites);
+		BeginSprite();
+		RenderSprites();
+		RenderParticles();
+		RenderPoints();
+		EndSprite();
+	}
+	// Sem isto us_ui lia 0 na cena de personagem e o custo caia em us_unmeasured --
+	// justamente o bloco que era o maior suspeito dos 87% nao medidos aqui.
+	ScopedRenderPhase uiPhase(RenderPhaseUi);
 	BeginBitmap();
 	RenderInfomation();
 
@@ -1485,36 +1670,85 @@ bool NewRenderLogInScene(HDC hDC)
 #endif //PJH_NEW_SERVER_SELECT_MAP
 
 	Height = 480;
-    Width = FrameBeginOpengl();
-	glClearColor(0.f,0.f,0.f,1.f);
+	// Ultimo bloco 100% invisivel do cliente: a tela de login nao tinha uma unica
+	// ScopedRenderPhase, entao seu cpu_us era integralmente us_unmeasured. Mesmas
+	// fases de MainScene, pelo mesmo motivo da cena de personagem — comparabilidade.
+	{
+		ScopedRenderPhase phase(RenderPhaseFrameBegin);
+		Width = FrameBeginOpengl();
+		glClearColor(0.f,0.f,0.f,1.f);
+	}
 
-	BeginOpengl(0, 0, GetWindowsX, GetWindowsY);
-	CreateFrustrum((float)Width/(float)640, pos);
+	{
+		ScopedRenderPhase phase(RenderPhaseSetup);
+		BeginOpengl(0, 0, GetWindowsX, GetWindowsY);
+	}
+	{
+		ScopedRenderPhase phase(RenderPhaseFrustum);
+		CreateFrustrum((float)Width/(float)640, pos);
+	}
 
 	if (!CUIMng::Instance().m_CreditWin.IsShow())
 	{
 		CameraViewFar = 330.f * CCameraMove::GetInstancePtr()->GetCurrentCameraDistanceLevel();
 #ifndef PJH_NEW_SERVER_SELECT_MAP
-		BeginOpengl();
+		{
+			ScopedRenderPhase phase(RenderPhaseSetup);
+			BeginOpengl();
+		}
 #endif //PJH_NEW_SERVER_SELECT_MAP
-		RenderTerrain(false);
+		{
+			ScopedRenderPhase phase(RenderPhaseTerrain);
+			RenderTerrain(false);
+		}
 		CameraViewFar = 7000.f;
-		RenderCharactersClient();
-		RenderBugs();
-		RenderObjects();
-		RenderJoints();
-		RenderEffects();
-		CheckSprites();
-		RenderLeaves();
-		RenderBoids();
-		RenderObjects_AfterCharacter();
-		ThePetProcess().RenderPets();
+		{
+			ScopedRenderPhase phase(RenderPhaseCharacters);
+			RenderCharactersClient();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseMisc);
+			RenderBugs();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseObjects);
+			RenderObjects();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseEffects);
+			RenderJoints();
+			RenderEffects();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseSprites);
+			CheckSprites();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseMisc);
+			RenderLeaves();
+			RenderBoids();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseObjects);
+			RenderObjects_AfterCharacter();
+		}
+		{
+			ScopedRenderPhase phase(RenderPhaseMisc);
+			ThePetProcess().RenderPets();
+		}
 	}
 
-	BeginSprite();
-	RenderSprites();
-	RenderParticles();
-	EndSprite();
+	{
+		ScopedRenderPhase phase(RenderPhaseSprites);
+		BeginSprite();
+		RenderSprites();
+		RenderParticles();
+		EndSprite();
+	}
+	// Toda a cauda 2D da tela de login -- logo, tour mode, campos de entrada,
+	// janelas. Sao centenas de linhas que ficavam fora de qualquer fase, entao
+	// us_ui lia 0 aqui e o custo caia inteiro em us_unmeasured.
+	ScopedRenderPhase uiPhase(RenderPhaseUi);
 	BeginBitmap();
 
 	if (CCameraMove::GetInstancePtr()->IsTourMode())
@@ -2119,9 +2353,10 @@ void MoveMainScene()
 		if(MouseY>=(int)(GetWindowsY - 51))
 			MouseOnWindow = true;
 
+		ScopedRenderPhase phase(RenderPhaseSimUi);
 		g_pPartyManager->Update();
 		g_pNewUISystem->Update();
-		
+
 		if (MouseLButton == true && false == g_pNewUISystem->CheckMouseUse() && g_dwMouseUseUIID == 0 && g_pNewUISystem->IsVisible(SEASON3B::INTERFACE_CHATINPUTBOX) == false )
 		{
 			g_pWindowMgr->SetWindowsEnable(FALSE);
@@ -2142,7 +2377,12 @@ void MoveMainScene()
 	if(ErrorMessage != NULL)
 		MouseOnWindow = true;
 
-    MoveObjects();
+	{
+		// Percorre os objetos de cenario do mundo. Suspeito principal do custo de
+		// simulacao: e o laco mais largo daqui.
+		ScopedRenderPhase phase(RenderPhaseSimObjects);
+		MoveObjects();
+	}
     if(!CameraTopViewEnable)
     	MoveItems();
 	if ( ( gMapManager.WorldActive==WD_0LORENCIA && HeroTile!=4 ) || 
@@ -2176,15 +2416,21 @@ void MoveMainScene()
 	MoveBugs();
 	MoveChat();
 	UpdatePersonalShopTitleImp();
-	MoveHero();
-    MoveCharactersClient();
+	{
+		ScopedRenderPhase phase(RenderPhaseSimChars);
+		MoveHero();
+		MoveCharactersClient();
+	}
 	ThePetProcess().UpdatePets();
-    MovePoints();
-	MovePlanes();
-	MoveEffects();
-    MoveJoints();
-    MoveParticles();
-    MovePointers();
+	{
+		ScopedRenderPhase phase(RenderPhaseSimEffects);
+		MovePoints();
+		MovePlanes();
+		MoveEffects();
+		MoveJoints();
+		MoveParticles();
+		MovePointers();
+	}
 
 	g_Direction.CheckDirection();
     
@@ -2240,8 +2486,11 @@ bool RenderMainScene()
 		Height = 480;
 	}
 
+	// FrameBeginOpengl e a escolha de clear color. Barato em teoria, mas nunca foi
+	// medido — e no PC o FrameBeginOpengl fala com o GL, entao pode bloquear.
+	long long frameBeginStartUs = RenderStatsNowMicroseconds();
     Width = FrameBeginOpengl();
-    if(gMapManager.WorldActive == WD_0LORENCIA)      
+    if(gMapManager.WorldActive == WD_0LORENCIA)
 	{
 		glClearColor(10/256.f,20/256.f,14/256.f,1.f);
 	}
@@ -2270,6 +2519,8 @@ bool RenderMainScene()
 	{
 		glClearColor(0/256.f,0/256.f,0/256.f,1.f);
 	}
+
+	g_renderPhaseUs[RenderPhaseFrameBegin] += RenderStatsNowMicroseconds() - frameBeginStartUs;
 
 	{
 		ScopedRenderPhase phase(RenderPhaseSetup);
@@ -2327,7 +2578,13 @@ bool RenderMainScene()
 		ScopedRenderPhase phase(RenderPhaseEffects);
 		RenderEffectShadows();
 	}
-   	RenderBoids();
+	{
+		// O RenderBoids(true) mais adiante ja contava em Misc; este nao contava em
+		// nada. Um resto conhecido mas nao embrulhado faz us_unmeasured != 0 parecer
+		// custo desconhecido.
+		ScopedRenderPhase phase(RenderPhaseMisc);
+		RenderBoids();
+	}
 
 	{
 		ScopedRenderPhase phase(RenderPhaseCharacters);
@@ -2364,8 +2621,11 @@ bool RenderMainScene()
 		RenderEffects();
 		RenderBlurs();
 	}
-    CheckSprites();
-    BeginSprite();
+	{
+		ScopedRenderPhase phase(RenderPhaseSprites);
+		CheckSprites();
+		BeginSprite();
+	}
 
 	if ((gMapManager.WorldActive == WD_2DEVIAS && HeroTile != 3 && HeroTile < 10)
 		|| IsIceCity()
@@ -2379,6 +2639,7 @@ bool RenderMainScene()
 		|| IsUnitedMarketPlace()
 		)
 	{
+		ScopedRenderPhase phase(RenderPhaseMisc);
 		RenderLeaves();
 	}
 
@@ -2391,9 +2652,8 @@ bool RenderMainScene()
 		{
 			RenderPoints ( byWaterMap );
 		}
+		EndSprite();
 	}
-
-    EndSprite();
 
 	{
 		ScopedRenderPhase phase(RenderPhaseEffects);
@@ -2402,6 +2662,10 @@ bool RenderMainScene()
 
     if(IsWaterTerrain() == true)
     {
+		// Passe inteiro repetido: agua, joints, efeitos, blurs E todos os sprites
+		// outra vez, entre um EndOpengl/BeginOpengl. So roda em mapa com agua, o que
+		// explica por que world 0 e world 3 divergem tanto no tempo nao medido.
+		ScopedRenderPhase phase(RenderPhaseWater);
         byWaterMap = 2;
 
 		EndOpengl();
@@ -2445,35 +2709,42 @@ bool RenderMainScene()
 		ScopedRenderPhase phase(RenderPhaseSelect);
 		SelectObjects();
 	}
-	BeginBitmap();
-    RenderObjectDescription();
-	
-	if(CameraTopViewEnable == false)
 	{
-        RenderInterface(true);
-	}
-	RenderTournamentInterface();
-	EndBitmap();						
-	
-	g_pPartyManager->Render();
-	g_pNewUISystem->Render();
-	
-	BeginBitmap();
+		// Todo o 2D: descricao de objeto, interface, party, NewUI, info e cursor.
+		// Quatro pares BeginBitmap/EndBitmap, e cada BeginBitmap faz flush da fila
+		// de opacos e troca projecao. Era o meu principal suspeito para os 76% da
+		// v8; a v14 mostrou que o teto dele e ~640 us, mas ele nunca foi isolado.
+		ScopedRenderPhase phase(RenderPhaseUi);
+		BeginBitmap();
+		RenderObjectDescription();
 
-	RenderInfomation();
+		if(CameraTopViewEnable == false)
+		{
+			RenderInterface(true);
+		}
+		RenderTournamentInterface();
+		EndBitmap();
+
+		g_pPartyManager->Render();
+		g_pNewUISystem->Render();
+
+		BeginBitmap();
+
+		RenderInfomation();
 
 #ifdef ENABLE_EDIT
-	RenderDebugWindow();
+		RenderDebugWindow();
 #endif //ENABLE_EDIT
 
-	EndBitmap();
-	BeginBitmap();
+		EndBitmap();
+		BeginBitmap();
 
-    RenderCursor();
+		RenderCursor();
 
-	EndBitmap();
-    EndOpengl();
-	
+		EndBitmap();
+		EndOpengl();
+	}
+
 	return true;
 }
 
@@ -2491,12 +2762,16 @@ int TimePrior = GetTickCount();
 double target_fps = 60;
 double ms_per_frame = 1000.0 / target_fps;
 
+// O `targetFps = -1` que estava aqui sobrescrevia o proprio argumento, entao
+// target_fps era -1 em qualquer chamada e ms_per_frame ficava -1000. Efeito:
+// CheckRenderNextFrame() retornava sempre true e WaitForNextActivity() era
+// codigo morto inalcancavel — o teto nunca existiu, nem o de 60. Rodar a 170 FPS
+// num notebook derruba o FPS *sustentado* por throttling termico, entao o teto
+// tem valor pratico. Convencao mantida: valor <= 0 significa ilimitado.
 void SetTargetFps(double targetFps)
 {
-	targetFps = -1;
-
 	target_fps = targetFps;
-	ms_per_frame = 1000.0 / target_fps;
+	ms_per_frame = (targetFps > 0.0) ? (1000.0 / targetFps) : -1.0;
 }
 
 double last_render_tick_count = 0;
@@ -2593,11 +2868,17 @@ void MainScene(HDC hDC)
 		return;
 	}
 		
-	g_PhysicsManager.Move(0.025f * FPS_ANIMATION_FACTOR);
+	// Fisica, gerencia de bitmaps e som 3D rodam dentro da janela de cpu_us e fora
+	// de qualquer fase. Sao classificados como simulacao, nao como render: nenhum
+	// deles emite geometria.
+	{
+		ScopedRenderPhase phase(RenderPhaseSimulation);
+		g_PhysicsManager.Move(0.025f * FPS_ANIMATION_FACTOR);
 
-	Bitmaps.Manage();
+		Bitmaps.Manage();
 
-	Set3DSoundPosition();
+		Set3DSoundPosition();
+	}
 
     if( gMapManager.WorldActive==WD_10HEAVEN )
     {
@@ -2671,7 +2952,10 @@ void MainScene(HDC hDC)
 			Success = RenderMainScene();
 		}
 
-		g_PhysicsManager.Render();
+		{
+			ScopedRenderPhase phase(RenderPhaseEffects);
+			g_PhysicsManager.Render();
+		}
 
 		//#if defined(_DEBUG) || defined(LDS_FOR_DEVELOPMENT_TESTMODE) || defined(LDS_UNFIXED_FIXEDFRAME_FORDEBUG)
 		// A leitura ocorre antes de desenhar o overlay, portanto a amostra mostra
@@ -2681,6 +2965,11 @@ void MainScene(HDC hDC)
 		const Platform::LegacyRenderFrameStats renderStats = Platform::GetLegacyRenderFrameStats();
 		if (writeRenderStatsCsv)
 			CaptureRenderStatsCsv(renderStats, RenderStatsElapsedMicroseconds());
+		// O overlay desenha DEPOIS da leitura de cpu_us, portanto cai no gap que a
+		// v14 mediu entre 0,4 e 4,1 ms. Cada BeginBitmap faz flush da fila de
+		// opacos e troca a projecao, entao nao e obviamente barato. Medido por
+		// timestamp em vez de RAII para nao reindentar o bloco inteiro.
+		const long long overlayStartUs = RenderStatsNowMicroseconds();
 		BeginBitmap();
 		unicode::t_char szDebugText[128];
 		unicode::_sprintf(szDebugText, "FPS : %.1f Connected: %d", FPS, g_bGameServerConnected);
@@ -2723,11 +3012,18 @@ void MainScene(HDC hDC)
 		}
 		g_pRenderText->SetFont(g_hFont);
 		EndBitmap();
+		g_pendingPhaseUs[RenderPhaseOverlay] += RenderStatsNowMicroseconds() - overlayStartUs;
 		//#endif // defined(_DEBUG) || defined(LDS_FOR_DEVELOPMENT_TESTMODE) || defined(LDS_UNFIXED_FIXEDFRAME_FORDEBUG)
 
 		if (Success)
 		{
+			// O ponto onde o driver bloqueia esperando a GPU. Se o frame e limitado
+			// pela GPU, o custo aparece AQUI e em nenhuma das fases de cpu_us — era
+			// exatamente o buraco que a v14 deixou aberto em world 3, onde o frame
+			// cresceu 50% com cpu_us constante.
+			const long long presentStartUs = RenderStatsNowMicroseconds();
 			SwapBuffers(hDC);
+			g_pendingPhaseUs[RenderPhasePresent] += RenderStatsNowMicroseconds() - presentStartUs;
 		}
 
 		if (EnableSocket && SceneFlag == MAIN_SCENE)
@@ -3074,6 +3370,62 @@ bool CheckRenderNextFrame()
 	return false;
 }
 
+static const char* const kRenderCsvPath = "RenderPerformance_v16.csv";
+
+// O header vive numa constante porque ele e comparado com o do arquivo existente,
+// nao apenas escrito. Manter as duas copias sincronizadas a mao foi como o v15
+// se corrompeu.
+static const char* const kRenderCsvHeader =
+	"scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,mesh_cache,cpu_matrices,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_water,us_ui,us_framebegin,us_unmeasured,us_overlay,us_present,us_protocol,us_pump,us_limiter,us_frame_gap,us_char_pose,us_char_shadow,us_char_parts,us_sim_ui,us_sim_objects,us_sim_chars,us_sim_effects,us_sim_rest,phase_nesting,us_matrix_readback,matrix_readback_calls,cpu_matrix_divergence_rel,gpu_us,gpu_timer_state,render_scale,vsync,fps_limit,frame_total_us,frame_total_us_max,us_present_max,us_effects_max,effects_live_avg,effects_live_max,wheel_trails_avg,wheel_trails_max,wheel_trail_cap,fps,fps_period,fps_min\n";
+
+// O header so era escrito com o arquivo vazio, entao um build com conjunto de
+// colunas diferente ANEXAVA linhas de outra largura sob o header antigo. Foi
+// exatamente isso que corrompeu o v15: o arquivo terminou com linhas de 79 e de
+// 90 campos misturadas, e todo leitor de CSV desalinhou as colunas em silencio --
+// `vsync` lia 232, `fps_limit` lia 714. Rotacionar em vez de anexar remove a
+// classe de bug: nenhuma largura se mistura e nenhum dado se perde.
+// Retorna false quando o arquivo existente tem outro header E a rotacao NAO deu
+// certo. Nesse caso o chamador precisa desistir de escrever: anexar assim mesmo
+// recria a corrupcao exata que esta funcao existe para impedir. O caso real nao e
+// hipotetico -- o fluxo de trabalho e "capturar, depois abrir o CSV", e com o
+// arquivo aberto no Excel o rename falha com sharing violation.
+static bool RotateRenderCsvIfHeaderDiffers()
+{
+	FILE* existing = fopen(kRenderCsvPath, "r");
+	if (existing == NULL)
+		return true; // nao existe: escrever cria o arquivo com o header certo
+	char firstLine[4096];
+	firstLine[0] = 0;
+	const bool didRead = (fgets(firstLine, sizeof(firstLine), existing) != NULL);
+	fclose(existing);
+	if (didRead && strcmp(firstLine, kRenderCsvHeader) == 0)
+		return true; // mesmo conjunto de colunas: anexar e seguro
+
+	// Nome do arquivo rotacionado derivado de kRenderCsvPath, nao escrito de novo a
+	// mao: duas copias da mesma string sincronizadas manualmente foi o mecanismo da
+	// falha do v15, e repeti-lo aqui arquivaria dados de v17 como "...v16.oldN".
+	char base[256];
+	size_t size = strlen(kRenderCsvPath);
+	if (size >= sizeof(base)) return false;
+	memcpy(base, kRenderCsvPath, size + 1);
+	if (size > 4 && strcmp(base + size - 4, ".csv") == 0)
+		base[size - 4] = 0;
+
+	char destination[256];
+	for (int i = 0; i < 100; ++i)
+	{
+		sprintf(destination, "%s.old%d.csv", base, i);
+		FILE* test = fopen(destination, "r");
+		if (test != NULL)
+		{
+			fclose(test);
+			continue;
+		}
+		return rename(kRenderCsvPath, destination) == 0;
+	}
+	return false; // 100 slots ocupados: melhor nao escrever que corromper
+}
+
 // Grava uma amostra agregada, e nao um registro por frame. O aquecimento evita
 // que loading/recriacao de recursos contamine a comparacao entre cenas.
 static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats, DWORD renderCpuUs)
@@ -3094,8 +3446,20 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			gpuUs = 0;
 			frameTotalUs = 0;
 			fpsTotal = 0.0;
+			nestingViolations = 0;
+			frameTotalMax = 0; presentMax = 0; effectsMax = 0;
+			liveEffectsTotal = 0; liveEffectsMax = 0;
+			wheelTrailsTotal = 0; wheelTrailsMax = 0;
 		}
 		unsigned long long phaseUs[RenderPhaseCount];
+		unsigned long long nestingViolations;
+		// Media de 120 frames esconde mergulho transitorio: uma Twisting Shash que
+		// derruba o FPS por 1 segundo dilui a quase nada. Os picos existem para
+		// tornar o sintoma relatado mensuravel -- sem eles a captura nao consegue
+		// nem confirmar que a queda aconteceu.
+		unsigned long long frameTotalMax, presentMax, effectsMax;
+		unsigned long long liveEffectsTotal, liveEffectsMax;
+		unsigned long long wheelTrailsTotal, wheelTrailsMax;
 		unsigned long long matrixReadbackUs;
 		unsigned long long matrixReadbackCalls;
 		unsigned long long gpuUs;
@@ -3158,6 +3522,21 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		state.phaseUs[i] += static_cast<unsigned long long>(g_renderPhaseUs[i] > 0 ? g_renderPhaseUs[i] : 0);
 	state.matrixReadbackUs += g_matrixReadbackUs;
 	state.matrixReadbackCalls += g_matrixReadbackCalls;
+	state.nestingViolations += static_cast<unsigned long long>(g_phaseNestingViolations > 0 ? g_phaseNestingViolations : 0);
+	{
+		const unsigned long long frameNow = static_cast<unsigned long long>(g_frameTotalUs > 0 ? g_frameTotalUs : 0);
+		const unsigned long long presentNow = static_cast<unsigned long long>(g_renderPhaseUs[RenderPhasePresent] > 0 ? g_renderPhaseUs[RenderPhasePresent] : 0);
+		const unsigned long long effectsNow = static_cast<unsigned long long>(g_renderPhaseUs[RenderPhaseEffects] > 0 ? g_renderPhaseUs[RenderPhaseEffects] : 0);
+		const unsigned long long aliveNow = static_cast<unsigned long long>(g_liveEffects > 0 ? g_liveEffects : 0);
+		if (frameNow > state.frameTotalMax) state.frameTotalMax = frameNow;
+		if (presentNow > state.presentMax) state.presentMax = presentNow;
+		if (effectsNow > state.effectsMax) state.effectsMax = effectsNow;
+		if (aliveNow > state.liveEffectsMax) state.liveEffectsMax = aliveNow;
+		state.liveEffectsTotal += aliveNow;
+		const unsigned long long trailsNow = static_cast<unsigned long long>(g_liveWheelTrails > 0 ? g_liveWheelTrails : 0);
+		if (trailsNow > state.wheelTrailsMax) state.wheelTrailsMax = trailsNow;
+		state.wheelTrailsTotal += trailsNow;
+	}
 	state.gpuUs += Platform::GetLastGpuFrameTimeUs();
 	state.frameTotalUs += static_cast<unsigned long long>(g_frameTotalUs > 0 ? g_frameTotalUs : 0);
 	state.fpsTotal += FPS;
@@ -3173,21 +3552,65 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 	// A v6 acrescenta as colunas de instancing, cache de malha e cache de pose.
 	// Arquivo novo em vez de colunas extras no v5: misturar linhas de larguras
 	// diferentes quebraria qualquer leitor de CSV usado nas comparacoes.
-	FILE* file = fopen("RenderPerformance_v14.csv", "a+");
+	// Desistir da amostra e o comportamento certo: perder 120 frames de captura
+	// custa uma re-execucao, escrever linha de outra largura custa o arquivo inteiro
+	// e -- pior -- produz numero que parece valido.
+	if (!RotateRenderCsvIfHeaderDiffers())
+	{
+		state = CaptureState();
+		state.scene = scene; state.world = world; state.width = width; state.height = height; state.glslBackend = glslBackend;
+		return;
+	}
+	FILE* file = fopen(kRenderCsvPath, "a+");
 	if (file != NULL)
 	{
 		fseek(file, 0, SEEK_END);
 		if (ftell(file) == 0)
-			fprintf(file, "scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,mesh_cache,cpu_matrices,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_unmeasured,us_matrix_readback,matrix_readback_calls,cpu_matrix_divergence_rel,gpu_us,gpu_timer_state,render_scale,frame_total_us,fps\n");
+			fputs(kRenderCsvHeader, file);
 		const char* skinningMode = Platform::GetGpuSkinningMode() == Platform::GpuSkinningOff ? "off" :
 			(Platform::GetGpuSkinningMode() == Platform::GpuSkinningCompare ? "compare" : "on");
 		// Coluna explicita para o que ainda escapa das fases. Calcular aqui evita
 		// que a leitura da planilha tenha que refazer a subtracao toda vez.
-		double medidoRestante = static_cast<double>(state.cpuTotal);
-		for (int i = 0; i < RenderPhaseCount; ++i)
-			medidoRestante -= static_cast<double>(state.phaseUs[i]);
-		if (medidoRestante < 0.0) medidoRestante = 0.0;
-		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.6f,%.0f,%d,%d,%.0f,%.1f\n",
+		// So as fases DE DENTRO de cpu_us entram na subtracao. Overlay, present,
+		// protocolo e pump acontecem depois da leitura de cpu_us; incluir elas aqui
+		// zeraria us_unmeasured por engano.
+		double measuredRemainder = static_cast<double>(state.cpuTotal);
+		for (int i = 0; i < RenderPhaseInsideCount; ++i)
+			measuredRemainder -= static_cast<double>(state.phaseUs[i]);
+		if (measuredRemainder < 0.0) measuredRemainder = 0.0;
+		// O que sobra do periodo do frame depois de cpu_us e dos quatro blocos
+		// pos-cpu_us. Se ficar grande, ainda ha caminho de frame sem instrumento.
+		// Para em RenderPhaseOutsideCount: as fases de detalhe aninham dentro de
+		// cpu_us e subtrai-las aqui contaria o mesmo tempo duas vezes.
+		double gapRemainder = static_cast<double>(state.frameTotalUs) - static_cast<double>(state.cpuTotal);
+		for (int i = RenderPhaseInsideCount; i < RenderPhaseOutsideCount; ++i)
+			gapRemainder -= static_cast<double>(state.phaseUs[i]);
+		if (gapRemainder < 0.0) gapRemainder = 0.0;
+		// us_char_parts por subtracao: us_characters menos o corpo e a sombra. Evita
+		// instrumentar as ~2.400 linhas de equipamento de RenderCharacter uma a uma.
+		double characterParts = static_cast<double>(state.phaseUs[RenderPhaseCharacters])
+			- static_cast<double>(state.phaseUs[RenderPhaseCharPose])
+			- static_cast<double>(state.phaseUs[RenderPhaseCharShadow]);
+		if (characterParts < 0.0) characterParts = 0.0;
+		// Resto da simulacao, tambem por subtracao. Contem: fisica/Bitmaps.Manage/
+		// som 3D, MoveItems, MoveLeaves, boids/peixes/insetos/chat, pets, direcao,
+		// censura e console. Se ele dominar, o proximo corte e aqui dentro.
+		double simulationRemainder = static_cast<double>(state.phaseUs[RenderPhaseSimulation])
+			- static_cast<double>(state.phaseUs[RenderPhaseSimUi])
+			- static_cast<double>(state.phaseUs[RenderPhaseSimObjects])
+			- static_cast<double>(state.phaseUs[RenderPhaseSimChars])
+			- static_cast<double>(state.phaseUs[RenderPhaseSimEffects]);
+		if (simulationRemainder < 0.0) simulationRemainder = 0.0;
+		// fps correto: reciproco da media do periodo, nao media dos reciprocos.
+		// A coluna fps (media de 1/dt instantaneo) superestima em ate 11% nas
+		// amostras rapidas — medido na propria v14. Ela fica para nao quebrar a
+		// comparacao com as capturas antigas, mas fps_period e a metrica valida.
+		const double averagePeriodUs = state.frameTotalUs / 120.0;
+		const double fpsFromPeriod = (averagePeriodUs > 0.0) ? (1000000.0 / averagePeriodUs) : 0.0;
+		// FPS do PIOR frame da janela. E o numero que corresponde ao que o jogador
+		// sente quando reclama que "a magia derruba o FPS" -- a media nao mostra isso.
+		const double fpsWorstFrame = (state.frameTotalMax > 0) ? (1000000.0 / static_cast<double>(state.frameTotalMax)) : 0.0;
+		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.2f,%.0f,%.0f,%.6f,%.0f,%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%.1f,%.0f,%d,%.1f,%.1f,%.1f\n",
 			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode,
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureInstancing),
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureStaticTransformCache),
@@ -3213,10 +3636,28 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			state.phaseUs[RenderPhaseSprites] / 120.0, state.phaseUs[RenderPhaseSimulation] / 120.0,
 			state.phaseUs[RenderPhaseSelect] / 120.0, state.phaseUs[RenderPhaseSetup] / 120.0,
 			state.phaseUs[RenderPhaseFrustum] / 120.0,
-			state.phaseUs[RenderPhaseMisc] / 120.0, medidoRestante / 120.0,
+			state.phaseUs[RenderPhaseMisc] / 120.0,
+			state.phaseUs[RenderPhaseWater] / 120.0, state.phaseUs[RenderPhaseUi] / 120.0,
+			state.phaseUs[RenderPhaseFrameBegin] / 120.0, measuredRemainder / 120.0,
+			state.phaseUs[RenderPhaseOverlay] / 120.0, state.phaseUs[RenderPhasePresent] / 120.0,
+			state.phaseUs[RenderPhaseProtocol] / 120.0, state.phaseUs[RenderPhasePump] / 120.0,
+			state.phaseUs[RenderPhaseLimiter] / 120.0, gapRemainder / 120.0,
+			state.phaseUs[RenderPhaseCharPose] / 120.0, state.phaseUs[RenderPhaseCharShadow] / 120.0,
+			characterParts / 120.0,
+			state.phaseUs[RenderPhaseSimUi] / 120.0, state.phaseUs[RenderPhaseSimObjects] / 120.0,
+			state.phaseUs[RenderPhaseSimChars] / 120.0, state.phaseUs[RenderPhaseSimEffects] / 120.0,
+			simulationRemainder / 120.0,
+			state.nestingViolations / 120.0,
 			state.matrixReadbackUs / 120.0, state.matrixReadbackCalls / 120.0,
 			g_cpuMatrixMaxDivergence, state.gpuUs / 120.0, Platform::GetGpuFrameTimerState(), g_renderScalePercent,
-			state.frameTotalUs / 120.0, state.fpsTotal / 120.0);
+			g_vsyncInterval, target_fps,
+			state.frameTotalUs / 120.0,
+			static_cast<double>(state.frameTotalMax), static_cast<double>(state.presentMax),
+			static_cast<double>(state.effectsMax),
+			state.liveEffectsTotal / 120.0, static_cast<double>(state.liveEffectsMax),
+			state.wheelTrailsTotal / 120.0, static_cast<double>(state.wheelTrailsMax),
+			g_wheelTrailCap,
+			state.fpsTotal / 120.0, fpsFromPeriod, fpsWorstFrame);
 		fclose(file);
 	}
 	state = CaptureState();
@@ -3273,12 +3714,25 @@ void RenderScene(HDC hDC)
     ParseRenderFeatureFlag(commandLine, "-cpumatrices=", Platform::RenderFeatureCpuMatrices);
     {
         // -renderscale=N (porcento). Fora de 1..100 e ignorado.
-        const char* escala = ::strstr(commandLine, "-renderscale=");
-        if (escala != NULL)
+        const char* scale = ::strstr(commandLine, "-renderscale=");
+        if (scale != NULL)
         {
-            const int valor = atoi(escala + strlen("-renderscale="));
-            if (valor >= 1 && valor <= 100) g_renderScalePercent = valor;
+            const int value = atoi(scale + strlen("-renderscale="));
+            if (value >= 1 && value <= 100) g_renderScalePercent = value;
         }
+    }
+    {
+        // -wheeltrail=N limita os rastros simultaneos da Twisting Slash. Ausente
+        // mantem ilimitado, o comportamento historico. O valor vai para o CSV: uma
+        // captura limitada nao pode parecer ganho magico, mesma regra do renderscale.
+        const char* trail = ::strstr(commandLine, "-wheeltrail=");
+        if (trail != NULL)
+        {
+            const int value = atoi(trail + strlen("-wheeltrail="));
+            if (value >= 0 && value <= 200) g_wheelTrailCap = value;
+        }
+        else
+            g_wheelTrailCap = -1;
     }
     ParseModelListFlag(commandLine, "-instancing-models=", &Platform::SetInstancingModelWhitelist);
     Platform::BeginGpuSkinningFrame();
@@ -3287,8 +3741,16 @@ void RenderScene(HDC hDC)
 	g_frameTotalUs = (g_frameTopPrevUs != 0) ? (g_renderStatsStart - g_frameTopPrevUs) : 0;
 	g_frameTopPrevUs = g_renderStatsStart;
 	memset(g_renderPhaseUs, 0, sizeof(g_renderPhaseUs));
+	// Transfere as fases pos-cpu_us do frame anterior. Elas foram medidas depois
+	// de o CSV ter lido o array, entao chegam com um frame de atraso.
+	for (int i = RenderPhaseInsideCount; i < RenderPhaseCount; ++i)
+	{
+		g_renderPhaseUs[i] = g_pendingPhaseUs[i];
+		g_pendingPhaseUs[i] = 0;
+	}
 	g_matrixReadbackUs = 0;
 	g_matrixReadbackCalls = 0;
+	g_phaseNestingViolations = 0;
     CalcFPS();
 	{
 		ScopedRenderPhase phase(RenderPhaseSimulation);

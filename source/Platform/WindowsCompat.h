@@ -422,23 +422,23 @@ inline void SetLastError(DWORD code) { errno = (int)code; }
 #define STRSAFE_E_INSUFFICIENT_BUFFER ((HRESULT)0x8007007AL)
 #endif
 
-inline HRESULT StringCchCopyA(char* destino, size_t capacidade, const char* origem)
+inline HRESULT StringCchCopyA(char* destination, size_t capacidade, const char* source)
 {
-    if (destino == NULL || capacidade == 0) return STRSAFE_E_INSUFFICIENT_BUFFER;
-    if (origem == NULL) { destino[0] = '\0'; return 0; }
+    if (destination == NULL || capacidade == 0) return STRSAFE_E_INSUFFICIENT_BUFFER;
+    if (source == NULL) { destination[0] = '\0'; return 0; }
 
     size_t i = 0;
-    while (i + 1 < capacidade && origem[i] != '\0') { destino[i] = origem[i]; ++i; }
-    destino[i] = '\0';
-    return (origem[i] == '\0') ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
+    while (i + 1 < capacidade && source[i] != '\0') { destination[i] = source[i]; ++i; }
+    destination[i] = '\0';
+    return (source[i] == '\0') ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
 
-inline HRESULT StringCchLengthA(const char* texto, size_t capacidade, size_t* tamanho)
+inline HRESULT StringCchLengthA(const char* texto, size_t capacidade, size_t* size)
 {
     if (texto == NULL) return STRSAFE_E_INSUFFICIENT_BUFFER;
     size_t i = 0;
     while (i < capacidade && texto[i] != '\0') ++i;
-    if (tamanho != NULL) *tamanho = i;
+    if (size != NULL) *size = i;
     return (i < capacidade) ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
 
@@ -450,11 +450,11 @@ inline HRESULT StringCchLengthA(const char* texto, size_t capacidade, size_t* ta
 // Variante com va_list. Nao pode ser macro para vsnprintf: a ordem dos
 // argumentos e a mesma, mas o nome aparece em contextos onde a macro
 // atrapalharia a leitura. Inline mantem a assinatura explicita.
-inline HRESULT StringCchVPrintfA(char* destino, size_t capacidade,
+inline HRESULT StringCchVPrintfA(char* destination, size_t capacidade,
                                  const char* formato, va_list argumentos)
 {
-    if (destino == NULL || capacidade == 0) return STRSAFE_E_INSUFFICIENT_BUFFER;
-    const int escritos = vsnprintf(destino, capacidade, formato, argumentos);
+    if (destination == NULL || capacidade == 0) return STRSAFE_E_INSUFFICIENT_BUFFER;
+    const int escritos = vsnprintf(destination, capacidade, formato, argumentos);
     return (escritos >= 0 && (size_t)escritos < capacidade)
          ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
@@ -466,20 +466,20 @@ inline HRESULT StringCchVPrintfA(char* destino, size_t capacidade,
 #define StringCchLength StringCchLengthA
 
 // ---- Diretorio e remocao de arquivo -----------------------------------------
-inline BOOL CreateDirectoryA(const char* caminho, void* /*seguranca*/)
+inline BOOL CreateDirectoryA(const char* path, void* /*seguranca*/)
 {
-    if (caminho == NULL) return FALSE;
+    if (path == NULL) return FALSE;
     // Sucesso se criou OU se ja existia, como o Win32 (que sinaliza a diferenca
     // por GetLastError, e nenhum chamador do cliente consulta).
-    if (mkdir(caminho, 0777) == 0) return TRUE;
+    if (mkdir(path, 0777) == 0) return TRUE;
     return (errno == EEXIST) ? TRUE : FALSE;
 }
 #define CreateDirectory CreateDirectoryA
 
-inline BOOL DeleteFileA(const char* caminho)
+inline BOOL DeleteFileA(const char* path)
 {
-    if (caminho == NULL) return FALSE;
-    return (remove(caminho) == 0) ? TRUE : FALSE;
+    if (path == NULL) return FALSE;
+    return (remove(path) == 0) ? TRUE : FALSE;
 }
 #define DeleteFile DeleteFileA
 
@@ -820,7 +820,7 @@ inline size_t _mbclen(const unsigned char*) { return 1; }
 
 // Foco de teclado. Implementado em Platform/PlatformEditControl.cpp: aponta para o
 // campo de texto sintetico que recebe a digitacao (NULL = teclado do jogo).
-HWND SetFocus(HWND janela);
+HWND SetFocus(HWND window);
 inline BOOL SwapBuffers(HDC)
 { PLATFORM_STUB_ONCE("SwapBuffers (use Platform::IRenderContext)"); return TRUE; }
 
@@ -837,8 +837,8 @@ inline BOOL SwapBuffers(HDC)
 // sintetico de Platform/PlatformEditControl.cpp. Para qualquer outro handle (a
 // janela principal) continuam sendo no-op -- o encerramento e o redimensionamento
 // passam por Platform::IWindow.
-LRESULT SendMessage(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
-BOOL PostMessage(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
+LRESULT SendMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+BOOL PostMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
 inline void PostQuitMessage(int) {}
 
 // Empacotamento de versao usado pelo WinSock (WSAStartup).
@@ -955,13 +955,13 @@ inline HGLOBAL GlobalFree(HGLOBAL memory) { ::free(memory); return NULL; }
 // existe um EDIT SINTETICO com esse mesmo contrato, em
 // Platform/PlatformEditControl.cpp -- inclusive o subclass por GWL_WNDPROC, de que o
 // cliente depende para filtrar teclas.
-BOOL DestroyWindow(HWND janela);
-LONG SetWindowLongW(HWND janela, int indice, LONG valor);
-LONG SetWindowLongA(HWND janela, int indice, LONG valor);
-LONG GetWindowLongW(HWND janela, int indice);
-LONG GetWindowLongA(HWND janela, int indice);
-LRESULT CallWindowProcW(WNDPROC proc, HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
-LRESULT CallWindowProcA(WNDPROC proc, HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
+BOOL DestroyWindow(HWND window);
+LONG SetWindowLongW(HWND window, int index, LONG value);
+LONG SetWindowLongA(HWND window, int index, LONG value);
+LONG GetWindowLongW(HWND window, int index);
+LONG GetWindowLongA(HWND window, int index);
+LRESULT CallWindowProcW(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+LRESULT CallWindowProcA(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
 
 // Estilos e mensagens do controle EDIT nativo, usados por CUITextInputBox::Init.
 // Os valores sao os do SDK; sem CreateWindowW real nenhum deles tem efeito, mas
@@ -1025,24 +1025,24 @@ typedef struct tagCOMPOSITIONFORM
 // Todas implementadas em Platform/PlatformEditControl.cpp. CreateWindowW so conhece
 // a classe "edit"; qualquer outra continua devolvendo NULL.
 HWND CreateWindowW(LPCWSTR classe, LPCWSTR texto, DWORD estilo, int x, int y,
-                   int largura, int altura, HWND pai, HMENU menu, HINSTANCE instancia,
+                   int width, int height, HWND pai, HMENU menu, HINSTANCE instancia,
                    LPVOID parametro);
-BOOL ShowWindow(HWND janela, int comando);
-BOOL SetWindowPos(HWND janela, HWND depoisDe, int x, int y, int largura, int altura, UINT sinalizadores);
-LRESULT SendMessageW(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
-int  GetWindowText(HWND janela, LPSTR destino, int tamanho);
-int  GetWindowTextA(HWND janela, LPSTR destino, int tamanho);
-int  GetWindowTextW(HWND janela, LPWSTR destino, int tamanho);
-BOOL SetWindowTextW(HWND janela, LPCWSTR texto);
-BOOL SetWindowTextA(HWND janela, LPCSTR texto);
+BOOL ShowWindow(HWND window, int comando);
+BOOL SetWindowPos(HWND window, HWND depoisDe, int x, int y, int width, int height, UINT sinalizadores);
+LRESULT SendMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+int  GetWindowText(HWND window, LPSTR destination, int size);
+int  GetWindowTextA(HWND window, LPSTR destination, int size);
+int  GetWindowTextW(HWND window, LPWSTR destination, int size);
+BOOL SetWindowTextW(HWND window, LPCWSTR texto);
+BOOL SetWindowTextA(HWND window, LPCSTR texto);
 BOOL GetCaretPos(LPPOINT ponto);
 inline HDC GetDC(HWND) { return NULL; }
 inline int ReleaseDC(HWND, HDC) { return 0; }
-BOOL IsWindowVisible(HWND janela);
-BOOL PostMessageW(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
-BOOL PostMessageA(HWND janela, UINT mensagem, WPARAM wParam, LPARAM lParam);
-int  GetScrollPos(HWND janela, int barra);
-int  SetScrollPos(HWND janela, int barra, int posicao, BOOL redesenhar);
+BOOL IsWindowVisible(HWND window);
+BOOL PostMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+BOOL PostMessageA(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+int  GetScrollPos(HWND window, int barra);
+int  SetScrollPos(HWND window, int barra, int position, BOOL redraw);
 // TODO(Platform): temporizador do Win32. O loop de quadro ja tem relogio proprio
 // (GetTickCount); quem depender de WM_TIMER precisa migrar para ele.
 inline UINT_PTR SetTimer(HWND, UINT_PTR id, UINT, void*)
@@ -1374,8 +1374,8 @@ typedef struct
 #ifndef INVALID_HANDLE_VALUE
 #define INVALID_HANDLE_VALUE ((HANDLE)-1)
 #endif
-HANDLE FindFirstFile(LPCSTR padrao, LPWIN32_FIND_DATA dados);
-BOOL   FindNextFile(HANDLE handle, LPWIN32_FIND_DATA dados);
+HANDLE FindFirstFile(LPCSTR padrao, LPWIN32_FIND_DATA data);
+BOOL   FindNextFile(HANDLE handle, LPWIN32_FIND_DATA data);
 BOOL   FindClose(HANDLE handle);
 #ifndef FILE_ATTRIBUTE_DIRECTORY
 #define FILE_ATTRIBUTE_DIRECTORY 0x00000010
