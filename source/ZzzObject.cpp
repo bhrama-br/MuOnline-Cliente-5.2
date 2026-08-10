@@ -9400,8 +9400,37 @@ void NextGradeObjectRender(CHARACTER *c)
 
 extern float g_Luminosity;
 
+// Profundidade dos dois cronometros de personagem. Declarados juntos e ANTES das duas
+// funcoes porque o de malha e consultado pelo de desenho: ver abaixo.
+static int s_charDrawDepth = 0;
+static int s_charMeshDepth = 0;
+
 void RenderPartObjectEffect(OBJECT *o,int Type,vec3_t Light,float Alpha,int ItemLevel,int Option1,int ExtOption,int Select,int RenderType)
-{	
+{
+	// Cronometro do DESENHO de personagem. Apesar do nome, esta funcao e o caminho de
+	// emissao (RenderBodyShadow, RenderBody e companhia); RenderPartObject e setup mais
+	// b->Transform mais cloth mais esta chamada.
+	//
+	// SO conta quando esta DENTRO de RenderPartObject (s_charMeshDepth > 0). Sem essa
+	// condicao a coluna media dois chamadores -- este e RenderLinkObject
+	// (ZzzCharacter.cpp:7222, o caminho de arma/asa) -- e a captura de 2026-08-10 saiu
+	// com us_char_draw em 147% de us_char_mesh, ou seja `mesh - draw` negativo. O
+	// aninhamento estava afirmado no comentario e nao era verdade; agora e imposto aqui.
+	// O tempo do outro chamador tem coluna propria (us_char_link).
+	//
+	// RAII e obrigatorio: a funcao tem 16 pontos de saida. A profundidade tambem cobre
+	// reentrancia por caminhos de parte/efeito.
+	const bool timeThisDraw = (s_charDrawDepth++ == 0) && s_charMeshDepth > 0;
+	struct DrawTimerExit
+	{
+		bool active; long long start;
+		~DrawTimerExit()
+		{
+			--s_charDrawDepth;
+			if (active) RecordCharDrawUs(FrameLoopNowMicroseconds() - start);
+		}
+	} drawTimerExit = { timeThisDraw, timeThisDraw ? FrameLoopNowMicroseconds() : 0 };
+
 	int Level = (ItemLevel>>3)&15;
 	if ( RenderType & RENDER_WAVE)
 	{
@@ -10530,14 +10559,40 @@ void BodyLight(OBJECT *o,BMD *b);
 
 void RenderPartObject(OBJECT *o,int Type,void *p2,vec3_t Light,float Alpha,int ItemLevel,int Option1,int ExtOption,bool GlobalTransform,bool HideSkin,bool Translate,int Select,int RenderType)
 {
-	if(Alpha <= 0.01f) 
+	if(Alpha <= 0.01f)
 	{
 		return;
 	}
 
+	// Depois do descarte por alpha, de proposito: a malha invisivel nao chega a ser
+	// emitida e nao deve entrar em char_part_meshes_avg. A funcao so conta quando a
+	// fase Characters esta ativa, entao objeto de mundo e efeito ficam fora.
+	RecordCharPartMesh();
+
+	// Tempo desta emissao de malha. Com us_char_transform ja medido, isto reparte o
+	// bloco dominante em tres: laco por vertice, submissao, e o resto -- que sao os
+	// extras por personagem (luz de terreno, ganchos de RenderMonsterVisual, nome,
+	// barra, pet, marca). A captura de 2026-08-10 mostrou o "resto" em 9,6 ms de um
+	// frame de 16,9 ms, entao adivinhar qual dos tres e nao serve mais.
+	//
+	// Profundidade porque ganchos daqui podem reentrar: Draw_RenderObject chama
+	// RenderHelper em Lua, e PatentModelRender e codigo de fora. Contar o interno
+	// somaria o mesmo intervalo duas vezes.
+	const bool timeThisMesh = (s_charMeshDepth++ == 0);
+	const long long meshStartUs = timeThisMesh ? FrameLoopNowMicroseconds() : 0;
+	struct MeshTimerExit
+	{
+		bool active; long long start;
+		~MeshTimerExit()
+		{
+			--s_charMeshDepth;
+			if (active) RecordCharMeshUs(FrameLoopNowMicroseconds() - start);
+		}
+	} meshTimerExit = { timeThisMesh, meshStartUs };
+
 	PART_t *p = ( PART_t*)p2;
-	
-	if(Type == MODEL_POTION+12)	
+
+	if(Type == MODEL_POTION+12)
 	{
      	int Level = (ItemLevel>>3)&15;
 

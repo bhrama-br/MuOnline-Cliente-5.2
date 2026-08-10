@@ -625,6 +625,9 @@
     <ClCompile Include="source\ZzzScene.cpp">
       <Filter>MU\Client\core</Filter>
     </ClCompile>
+    <ClCompile Include="source\CrowdLod.cpp">
+      <Filter>MU\Client\core</Filter>
+    </ClCompile>
     <ClCompile Include="source\BoneManager.cpp">
       <Filter>MU\Client\Source Files</Filter>
     </ClCompile>
@@ -2020,6 +2023,9 @@
       <Filter>MU\Client\core</Filter>
     </ClInclude>
     <ClInclude Include="source\ZzzScene.h">
+      <Filter>MU\Client\core</Filter>
+    </ClInclude>
+    <ClInclude Include="source\CrowdLod.h">
       <Filter>MU\Client\core</Filter>
     </ClInclude>
     <ClInclude Include="source\KeyGenerater.h">

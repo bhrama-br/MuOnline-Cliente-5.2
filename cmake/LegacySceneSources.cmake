@@ -41,6 +41,10 @@ set(MU_LEGACY_SCENE_SOURCES
     ${MU_GAME_SRC}/CharacterManager.cpp
     ${MU_GAME_SRC}/CreditInfo.cpp
     ${MU_GAME_SRC}/CriticalSection.cpp
+    # Crowd LOD. Entra na lista compartilhada no MESMO commit em que o modulo
+    # nasce: fora dela o arquivo simplesmente nao existe no Web nem no Android, e
+    # a divergencia so apareceria como link error muito depois.
+    ${MU_GAME_SRC}/CrowdLod.cpp
     ${MU_GAME_SRC}/CustomBow.cpp
     ${MU_GAME_SRC}/CustomCape.cpp
     ${MU_GAME_SRC}/CustomEffects.cpp

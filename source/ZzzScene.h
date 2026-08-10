@@ -43,6 +43,34 @@ void RecordFrameLimiterUs(long long microseconds);
 void RecordCharPoseUs(long long microseconds);
 void RecordCharShadowUs(long long microseconds);
 
+// Tempo dentro de RenderPartObjectEffect, que apesar do nome e o caminho de DESENHO,
+// contado SOMENTE quando aninhado em RenderPartObject. Logo
+// `us_char_mesh - us_char_draw` e o setup mais a matriz de osso mais o cloth.
+void RecordCharDrawUs(long long microseconds);
+
+// Tempo dentro de RenderLinkObject: armas, asas e partes ligadas. Caminho PARALELO a
+// RenderPartObject, com animacao e transformacao proprias -- nao aninha em
+// `us_char_mesh`, e sim ao lado dele dentro de `us_char_parts`.
+void RecordCharLinkUs(long long microseconds);
+
+// Tempo dentro de RenderPartObject (emissao de malha de personagem). Aninha dentro de
+// `us_char_parts` e CONTEM `us_char_transform` quando a transformacao e diferida --
+// nesse regime o laco roda dentro da submissao. Logo:
+//
+//   us_char_parts - us_char_mesh                = extras por personagem
+//   us_char_mesh  - (transform diferido)        = submissao pura
+void RecordCharMeshUs(long long microseconds);
+
+// Laco por vertice de BMD::TransformVertices. Aninha dentro de `us_char_parts`, que e
+// o bloco dominante da captura de multidao -- e que, sendo subtracao, nao dizia o que
+// tinha dentro. Guardada pela fase Characters, mesma regra das duas acima.
+void RecordCharTransformUs(long long microseconds);
+
+// Contagem de malhas de personagem do frame (colunas de Crowd LOD no CSV).
+// Chamada de RenderPartObject e guardada pela fase Characters, mesma regra das
+// duas funcoes acima. Nao mede tempo: so conta.
+void RecordCharPartMesh();
+
 extern void LogInScene(HDC hDC);
 extern void LoadingScene(HDC hDC);
 extern void Scene(HDC Hdc);

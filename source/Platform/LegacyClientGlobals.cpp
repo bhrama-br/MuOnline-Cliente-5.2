@@ -29,6 +29,7 @@
 #include "../WindowTray.h"
 #include "../UIMapName.h"
 #include "../ZzzScene.h"          // szServerIpAddress, g_ServerPort
+#include "../CrowdLod.h"          // secao [Render] do MainInfo.ini
 #include "LegacyFileAccess.h"
 #include "LegacySceneBringup.h"   // declara CarregarMainInfo
 #include "../wsclientinline.h"    // SendCheck, usado por CheckHack
@@ -145,6 +146,15 @@ namespace Platform
             // (`n % strlen(m_PrivateCode)`): vazio seria divisao por zero no caminho
             // de script cifrado.
             else if (key == "PrivateCode")      CopiarCampo(gProtect->m_MainInfo.m_PrivateCode, sizeof(gProtect->m_MainInfo.m_PrivateCode), value);
+            // Chaves da secao [Render] (Crowd LOD). Este e o UNICO canal de
+            // configuracao que Web e Android tem: nenhum dos dois recebe linha de
+            // comando, e sem arquivo eles ficariam presos ao default compilado --
+            // calibrar LOD por dispositivo exigiria recompilar.
+            //
+            // No PC este caminho nao existe: la o MainInfo vem de um struct binario
+            // cifrado (CProtect::ReadMainFile, Data\Configs\Configs.xtm), nao de
+            // texto. O canal do PC e a linha de comando.
+            else if (CrowdLod::ApplyIniKey(key.c_str(), value.c_str())) { }
         }
         fclose(file);
 

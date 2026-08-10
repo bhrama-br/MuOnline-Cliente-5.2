@@ -25,6 +25,7 @@
 #include "ZzzEffect.h"
 #include "ZzzOpenData.h"
 #include "ZzzScene.h"
+#include "CrowdLod.h"
 #include "DSPlaySound.h"
 #include "wsclientinline.h"
 #include "PhysicsManager.h"
@@ -6459,9 +6460,287 @@ void MoveCharacterClient(CHARACTER *cc)
 	}
 }
 
+// Rig de medicao do Crowd LOD (-crowd=N / CrowdSpawn no MainInfo.ini).
+//
+// POR QUE EXISTE: nao ha nenhuma captura do projeto com multidao, e servidor
+// povoado nao e reproduzivel -- duas execucoes nunca tem a mesma populacao no mesmo
+// lugar. Sem carga reproduzivel nao ha como saber se um corte de LOD ganhou tempo ou
+// se a cena mudou. Isto e INSTRUMENTO, nao recurso: o valor efetivo vai para a
+// coluna crowd_spawn do CSV justamente para que uma captura sintetica nao possa ser
+// lida como organica, a mesma regra de render_scale e wheel_trail_cap.
+//
+// Os sinteticos usam SetCharacterClass, entao carregam o MESMO equipamento do
+// jogador local -- as ~15 malhas por player que us_char_parts mede. Um boneco pelado
+// mediria a carga errada.
+//
+// Efeito colateral aceito e documentado: como qualquer personagem vivo, eles marcam
+// TW_CHARACTER e passam a bloquear caminho. Some junto com a multidao.
+namespace
+{
+	// Faixa de Key negativa: o servidor so manda chaves positivas, entao nada da
+	// rede colide com o rig e DeleteCharacter(Key) da rede nunca acerta um sintetico.
+	const short kCrowdRigKeyFirst = -30000;
+	// Folga de slots que o rig nunca ocupa. Sem ela um -crowd alto enche o pool e
+	// jogadores de verdade param de aparecer -- o instrumento passaria a alterar o
+	// que ele deveria apenas medir.
+	const int   kCrowdRigReservedSlots = 64;
+
+	bool IsCrowdRigCharacter(const CHARACTER* c)
+	{
+		return c->Key <= kCrowdRigKeyFirst;
+	}
+
+	bool IsCrowdRigKeyInUse(short key)
+	{
+		for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+		{
+			if (CharactersClient[i].Object.Live && CharactersClient[i].Key == key)
+				return true;
+		}
+		return false;
+	}
+
+	// Espiral quadrada em torno do heroi. Grade em vez de posicao aleatoria porque a
+	// captura precisa ser repetivel; e nao-aleatoria de proposito: Math.random no
+	// meio de uma medicao torna duas execucoes incomparaveis.
+	void CrowdRigTileForIndex(int index, int heroX, int heroY, int* outX, int* outY)
+	{
+		int ring = 1;
+		int remaining = index;
+		while (remaining >= ring * 8)
+		{
+			remaining -= ring * 8;
+			++ring;
+		}
+		const int side = ring * 2;
+		int dx = -ring;
+		int dy = -ring;
+		if (remaining < side)            { dx = -ring + remaining;        dy = -ring; }
+		else if (remaining < side * 2)   { dx =  ring;                    dy = -ring + (remaining - side); }
+		else if (remaining < side * 3)   { dx =  ring - (remaining - side * 2); dy = ring; }
+		else                             { dx = -ring;                    dy = ring - (remaining - side * 3); }
+		*outX = heroX + dx;
+		*outY = heroY + dy;
+	}
+
+	// Tipos de monstro/NPC que o rig pode replicar: os que JA existem vivos no mapa.
+	//
+	// Por que clonar em vez de fixar numeros de tipo: o modelo de monstro que nao
+	// pertence ao mapa atual pode nao estar carregado, e `RenderCharacter` desiste em
+	// silencio quando `Models[Type].NumActions == 0` (ZzzCharacter.cpp:8357). O rig
+	// spawnaria 200 monstros invisiveis de custo zero e a captura mostraria ganho que
+	// nao existe. Clonar o que o mapa tem garante modelo carregado E composicao
+	// realista, sem tabela de tipo por mapa para manter.
+	const int kCrowdRigMaxSampledTypes = 8;
+
+	int CollectCrowdRigTypes(int legacyKind, int* types, int capacity)
+	{
+		int count = 0;
+		for (int i = 0; i < MAX_CHARACTERS_CLIENT && count < capacity; ++i)
+		{
+			CHARACTER* c = &CharactersClient[i];
+			if (!c->Object.Live)          continue;
+			if (IsCrowdRigCharacter(c))   continue;   // nao clonar o proprio rig
+			if (c->Object.Kind != legacyKind) continue;
+			if (c->MonsterIndex < 0)      continue;
+
+			bool known = false;
+			for (int j = 0; j < count; ++j)
+			{
+				if (types[j] == c->MonsterIndex) { known = true; break; }
+			}
+			if (!known)
+				types[count++] = c->MonsterIndex;
+		}
+		return count;
+	}
+
+	int CountCrowdRigAlive(int legacyKind)
+	{
+		int count = 0;
+		for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+		{
+			CHARACTER* c = &CharactersClient[i];
+			if (c->Object.Live && IsCrowdRigCharacter(c) && c->Object.Kind == legacyKind)
+				++count;
+		}
+		return count;
+	}
+
+	void RemoveCrowdRig(int legacyKind, int howMany)
+	{
+		// De tras para frente: CreateCharacter toma o primeiro slot livre, entao a
+		// ordem de slot acompanha a ordem de criacao e remover do fim tira os mais
+		// recentes -- o que mantem as chaves contiguas e o cursor de chave curto.
+		for (int i = MAX_CHARACTERS_CLIENT - 1; i >= 0 && howMany > 0; --i)
+		{
+			CHARACTER* c = &CharactersClient[i];
+			if (c->Object.Live && IsCrowdRigCharacter(c)
+				&& (legacyKind < 0 || c->Object.Kind == legacyKind))
+			{
+				DeleteCharacter(c, &c->Object);
+				--howMany;
+			}
+		}
+	}
+
+	void UpdateCrowdRig()
+	{
+		const int kinds[3]        = { KIND_PLAYER, KIND_MONSTER, KIND_NPC };
+		const CrowdLod::Kind map[3] = { CrowdLod::KindPlayer, CrowdLod::KindMonster, CrowdLod::KindNpc };
+
+		int desired[3] = { 0, 0, 0 };
+		int alive[3]   = { 0, 0, 0 };
+		int desiredTotal = 0;
+		int aliveTotal   = 0;
+		for (int k = 0; k < 3; ++k)
+		{
+			desired[k] = CrowdLod::GetSpawnRequest(map[k]);
+			alive[k]   = CountCrowdRigAlive(kinds[k]);
+			aliveTotal += alive[k];
+		}
+
+		// O teto e do TOTAL, nao por tipo: os tres pedidos disputam o mesmo pool de
+		// 400. Sem cortar aqui, `-crowd=200 -crowdmonsters=200` encheria o pool e
+		// jogadores de verdade parariam de aparecer -- o instrumento passaria a
+		// alterar o que deveria apenas medir.
+		const int maximum = MAX_CHARACTERS_CLIENT - kCrowdRigReservedSlots;
+		for (int k = 0; k < 3; ++k)
+		{
+			if (desiredTotal + desired[k] > maximum)
+				desired[k] = maximum - desiredTotal;
+			if (desired[k] < 0) desired[k] = 0;
+			desiredTotal += desired[k];
+		}
+
+		// Fora da cena de jogo, ou com o rig desligado, os sinteticos somem. Trocar
+		// de mapa tambem os remove (ClearCharacters), e o laco abaixo repovoa em
+		// torno do heroi no mapa novo.
+		const bool active = (desiredTotal > 0) && (SceneFlag == MAIN_SCENE)
+			&& (Hero != NULL) && Hero->Object.Live;
+		if (!active)
+		{
+			if (aliveTotal > 0)
+				RemoveCrowdRig(-1, aliveTotal);
+			return;
+		}
+
+		int spawnIndex = 0;
+		// Cursor de chave, fora dos lacos para nao reprocurar do zero a cada criacao.
+		//
+		// A chave NAO pode sair de um contador de criados: se um sintetico do meio da
+		// faixa desaparecesse, a chave se repetiria, e o primeiro laco de
+		// CreateCharacter REINICIALIZARIA o existente em vez de criar um novo. O
+		// contador nao subiria, e o while giraria o frame inteiro criando nada --
+		// travamento, nao multidao.
+		int keyCursor = 0;
+
+		for (int k = 0; k < 3; ++k)
+		{
+			if (alive[k] > desired[k])
+			{
+				RemoveCrowdRig(kinds[k], alive[k] - desired[k]);
+				alive[k] = desired[k];
+				continue;
+			}
+			if (alive[k] == desired[k])
+				continue;
+
+			// Tipos disponiveis. Player nao precisa: o modelo e sempre MODEL_PLAYER e o
+			// equipamento vem do jogador local.
+			int types[kCrowdRigMaxSampledTypes];
+			int typeCount = 0;
+			if (kinds[k] != KIND_PLAYER)
+			{
+				typeCount = CollectCrowdRigTypes(kinds[k], types, kCrowdRigMaxSampledTypes);
+				if (typeCount == 0)
+				{
+					// Nenhum monstro/NPC vivo para clonar neste mapa. Silencio aqui
+					// produziria uma captura com `crowd_spawn_monsters=200` e zero
+					// monstro na tela -- exatamente o numero que parece valido e nao e.
+					// A coluna chars_monsters_avg do CSV denuncia, e este log diz por que.
+					fprintf(stderr, "[CrowdLod] rig: nenhum %s vivo no mapa para clonar; "
+						"%d nao foram criados\n",
+						kinds[k] == KIND_MONSTER ? "monstro" : "NPC", desired[k] - alive[k]);
+					continue;
+				}
+			}
+
+			while (alive[k] < desired[k])
+			{
+				int tileX = 0;
+				int tileY = 0;
+				CrowdRigTileForIndex(spawnIndex++, Hero->PositionX, Hero->PositionY, &tileX, &tileY);
+				// A espiral cresce indefinidamente; sem este teto um mapa cercado de
+				// parede giraria para sempre dentro de um unico frame.
+				if (spawnIndex > MAX_CHARACTERS_CLIENT * 8)
+					break;
+				if (tileX < 1 || tileX >= TERRAIN_SIZE - 1 || tileY < 1 || tileY >= TERRAIN_SIZE - 1)
+					continue;
+				const int index = TERRAIN_INDEX_REPEAT(tileX, tileY);
+				if ((TerrainWall[index] & (TW_NOMOVE | TW_NOGROUND)) != 0)
+					continue;
+
+				while (keyCursor < MAX_CHARACTERS_CLIENT
+					&& IsCrowdRigKeyInUse((short)(kCrowdRigKeyFirst - keyCursor)))
+					++keyCursor;
+				if (keyCursor >= MAX_CHARACTERS_CLIENT)
+					break;
+				const short key = (short)(kCrowdRigKeyFirst - keyCursor);
+				++keyCursor;
+
+				CHARACTER* c = NULL;
+				if (kinds[k] == KIND_PLAYER)
+				{
+					// Angulos variados: uma multidao toda virada para o mesmo lado seria
+					// artificialmente favoravel ao instancing e mediria um ganho que o
+					// jogo nao tem.
+					c = CreateCharacter(key, MODEL_PLAYER, (unsigned char)tileX, (unsigned char)tileY,
+						(float)((alive[k] % 8) * 45));
+					if (c == NULL || c == &CharactersClient[MAX_CHARACTERS_CLIENT])
+						break;
+					c->Key = key;
+					c->Class = Hero->Class;
+					c->Level = Hero->Level;
+					sprintf(c->ID, "Crowd%03d", alive[k]);
+					// Mesmo equipamento do jogador local: e o que da as ~15 malhas por
+					// personagem. Tambem chama SetPlayerStop, que poe a animacao de parado.
+					SetCharacterClass(c);
+					SetCharacterScale(c);
+				}
+				else
+				{
+					// CreateMonster e o mesmo caminho da rede: ele resolve o modelo e
+					// chama Setting_Monster, que e quem define Kind (MONSTER/NPC/TRAP)
+					// pela tabela de tipo. Nao classifico nada a mao aqui -- se eu
+					// escolhesse o Kind, o rig e o jogo poderiam discordar.
+					c = CreateMonster(types[alive[k] % typeCount], tileX, tileY, key);
+					if (c == NULL || c == &CharactersClient[MAX_CHARACTERS_CLIENT])
+						break;
+					c->Key = key;
+					// O tipo pedido pode cair em outro bucket (um "monstro" que a tabela
+					// classifica como NPC, ou vice-versa). Nesse caso o sintetico e
+					// removido na hora: deixa-lo vivo inflaria a composicao de um tipo
+					// que ninguem pediu, e contar como pedido mentiria na coluna.
+					if (c->Object.Kind != kinds[k])
+					{
+						DeleteCharacter(c, &c->Object);
+						break;
+					}
+				}
+				++alive[k];
+			}
+		}
+	}
+}
+
 void MoveCharactersClient()
 {
-	for(int i=0;i<TERRAIN_SIZE*TERRAIN_SIZE;i++)		
+	// Antes de qualquer marcacao de TerrainWall: um sintetico criado agora precisa
+	// entrar na mesma contabilidade de colisao que os demais neste frame.
+	UpdateCrowdRig();
+
+	for(int i=0;i<TERRAIN_SIZE*TERRAIN_SIZE;i++)
 	{
 		if((TerrainWall[i]&TW_CHARACTER)==TW_CHARACTER) TerrainWall[i] -= TW_CHARACTER;
 	}
@@ -6543,8 +6822,32 @@ void RenderBrightEffect(BMD *b,int Bitmap,int Link,float Scale,vec3_t Light,OBJE
 OBJECT g_ItemObject[ITEM_ETC+MAX_ITEM_INDEX];
 
 
+// Profundidade do cronometro de RenderLinkObject: uma arma pode pendurar outra parte
+// ligada, e contar a interna somaria o mesmo intervalo duas vezes.
+static int s_charLinkDepth = 0;
+
 void RenderLinkObject(float x,float y,float z,CHARACTER *c,PART_t *f,int Type,int Level,int Option1,bool Link,bool Translate,int RenderType, bool bRightHandItem)
-{		
+{
+	// Armas, asas e partes ligadas. Este caminho tem PlayAnimation, Animation e
+	// Transform proprios e chama RenderPartObjectEffect direto -- ou seja, ele NAO passa
+	// por RenderPartObject e nao entra em us_char_mesh.
+	//
+	// Foi por nao medi-lo que a captura de 2026-08-10 mostrou 190 us por personagem em
+	// "extras" no caso player e eu atribui isso a nome, barra de vida e pet. O desenho
+	// de arma sozinho ja era >= 6,3 ms. Agora tem coluna.
+	//
+	// RAII: a funcao tem 1.770 linhas e 9 pontos de saida.
+	const bool timeThisLink = (s_charLinkDepth++ == 0);
+	struct LinkTimerExit
+	{
+		bool active; long long start;
+		~LinkTimerExit()
+		{
+			--s_charLinkDepth;
+			if (active) RecordCharLinkUs(FrameLoopNowMicroseconds() - start);
+		}
+	} linkTimerExit = { timeThisLink, timeThisLink ? FrameLoopNowMicroseconds() : 0 };
+
 	OBJECT *o = &c->Object;
 	BMD    *b = &Models[Type];
 
@@ -11225,12 +11528,64 @@ void RenderCharacter(CHARACTER *c,OBJECT *o,int Select) //CreateCape
 	
 }
 
+// Mapas em que NENHUM personagem pode receber LOD (invariante 3 do
+// CROWD_LOD_PLAN.md). Nao e conservadorismo: nestes mapas o jogador precisa
+// identificar classe, equipamento e animacao de golpe a qualquer distancia, e
+// legibilidade competitiva nao se troca por tempo de frame.
+static bool CrowdLodMapForcesFull()
+{
+	if (gMapManager.InChaosCastle() || gMapManager.InBloodCastle() || gMapManager.InBattleCastle())
+		return true;
+	if (gMapManager.WorldActive == WD_31HUNTING_GROUND)
+		return true;
+	// Mesma condicao de IsDuelArena() (GMDuelArena.cpp:187), lida direto para nao
+	// arrastar o header do mapa para dentro deste arquivo.
+	return gMapManager.WorldActive == WD_64DUELARENA;
+}
+
+// Personagens individualmente isentos. A checagem de party e restrita a KIND_PLAYER
+// por dois motivos: IsPartyMemberChar percorre a lista com strncmp e seria ~2.000
+// comparacoes por frame no pool cheio; e ela compara pelo menos 1 caractere, entao
+// um monstro de ID vazio poderia casar com um membro de party por acidente.
+static bool CrowdLodIsExempt(CHARACTER* c, OBJECT* o, int index, bool mapForcesFull)
+{
+	if (mapForcesFull)                                      return true;
+	if (c == Hero)                                          return true;
+	if (index == SelectedCharacter || index == SelectedNpc)  return true;
+	if (o->Kind == KIND_PLAYER && g_pPartyManager->IsPartyMemberChar(c)) return true;
+	return false;
+}
+
 void RenderCharactersClient()
 {
+	// Fase 0 do Crowd LOD: CLASSIFICA e CONTA, nao corta. Nenhuma decisao de render
+	// abaixo consulta o nivel -- o que sai daqui sao as colunas do CSV que dizem
+	// como o frame escala com o numero de personagens. Ver CROWD_LOD_PLAN.md.
+	const bool crowdMapForcesFull = CrowdLodMapForcesFull();
 	for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
 	{
 		CHARACTER* c = &CharactersClient[i];
 		OBJECT* o = &c->Object;
+
+		if (o->Live)
+		{
+			const float dx = o->Position[0] - CameraPosition[0];
+			const float dy = o->Position[1] - CameraPosition[1];
+			const float dz = o->Position[2] - CameraPosition[2];
+			const float distance = sqrtf(dx * dx + dy * dy + dz * dz);
+			const bool forced = CrowdLodIsExempt(c, o, i, crowdMapForcesFull);
+			// WindowHeight, e nao o viewport escalado: -renderscale existe para
+			// variar SO a contagem de pixels da GPU. Se ele mexesse na faixa de LOD,
+			// a sonda de fill rate passaria a medir duas coisas ao mesmo tempo.
+			const float pixels = CrowdLod::ScreenPixels(distance, (float)WindowHeight, CameraFOV);
+			const CrowdLod::Level level = forced ? CrowdLod::LevelFull
+				: CrowdLod::ClassifyByScreenPixels(pixels);
+			// beyondFar responde uma pergunta da Fase 1: o teste de visibilidade de
+			// personagem e 2D (TestFrustrum2D) e nao tem plano far, entao hoje estes
+			// sao desenhados. Se a coluna vier zerada, corte por distancia nao paga.
+			CrowdLod::CountCharacter(CrowdLod::KindFromLegacyKind(o->Kind),
+				o->Visible ? true : false, distance > CameraViewFar, forced, level);
+		}
 
 		if (c != Hero && battleCastle::IsBattleCastleStart() == true && g_isCharacterBuff(o, eBuff_Cloaking))
 		{

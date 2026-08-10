@@ -7,6 +7,7 @@
 #include "Platform/LegacyRenderAdapter.h"
 #include "Platform/RenderPipeline.h"
 #include "ZzzInfomation.h"
+#include "./Utilities/Log/ErrorReport.h"   // g_ErrorReport, para o log de [GpuSkinReject]
 #include "ZzzBMD.h"
 #include "ZzzObject.h"
 #include "ZzzCharacter.h"
@@ -779,10 +780,21 @@ void BMD::EnsureVerticesTransformed()
     TransformVertices();
 }
 
+// Declarados em ZzzScene.h. Localmente em vez do include para nao arrastar a cena
+// inteira para dentro do modulo de malha -- mesmo padrao de ZzzLodTerrain.cpp:2636.
+long long FrameLoopNowMicroseconds();
+void RecordCharTransformUs(long long microseconds);
+
 void BMD::TransformVertices()
 {
     if (m_pendingBoneMatrix == NULL)
         return;
+
+    // Cronometrado a partir daqui: antes do teste nao ha trabalho, e contar a saida
+    // vazia inflaria a contagem de chamadas sem inflar o tempo. Este e o unico ponto
+    // de saida depois do teste, entao um par de leituras basta -- sem RAII para nao
+    // reindentar 90 linhas de laco por vertice.
+    const long long transformStartUs = FrameLoopNowMicroseconds();
 
     float(*BoneMatrix)[3][4] = m_pendingBoneMatrix;
     const bool Translate = m_pendingTranslate;
@@ -868,6 +880,8 @@ void BMD::TransformVertices()
     VectorCopy(BoundingMax, m_transformedBoundingMax);
     fTransformedSize = max(max(BoundingMax[0] - BoundingMin[0], BoundingMax[1] - BoundingMin[1]),
         BoundingMax[2] - BoundingMin[2]);
+
+    RecordCharTransformUs(FrameLoopNowMicroseconds() - transformStartUs);
 }
 
 // vResultPosition = (BoneTransformMatrix * vRelativePosition) * BMD::BodyScale + vObjectPosition;
@@ -1537,6 +1551,138 @@ void BMD::EndRenderCoinHeap(int coinCount)
     DrawLegacyVertexArray(vertices, colors, texCoords, m->NumTriangles * 3 * coinCount);
 }
 
+namespace
+{
+    // Por que este material nao qualifica para o caminho de GPU. Um bit por condicao
+    // de staticGpuCandidate, na mesma ordem em que ela e escrita.
+    enum GpuMaterialRejectBit
+    {
+        RejectPalette     = 1 << 0,   // mais de 200 ossos
+        RejectUntextured  = 1 << 1,   // sem RENDER_TEXTURE, sem efeito de material, sem bright
+        RejectRenderFlags = 1 << 2,   // flag de render fora da lista suportada
+        RejectAlpha       = 1 << 3,   // alpha < 0.99
+        RejectBlendMesh   = 1 << 4,
+        RejectBlendCoord  = 1 << 5,   // animacao de UV
+        RejectScript      = 1 << 6,   // script de textura
+        RejectNoneBlend   = 1 << 7,
+        RejectTexture     = 1 << 8    // textura nula, ou componentes != 3 e != 4
+    };
+
+    const char* GpuMaterialRejectName(int bit)
+    {
+        switch (bit)
+        {
+        case RejectPalette:     return "ossos>200";
+        case RejectUntextured:  return "sem-textura";
+        case RejectRenderFlags: return "renderflags";
+        case RejectAlpha:       return "alpha<0.99";
+        case RejectBlendMesh:   return "blendmesh";
+        case RejectBlendCoord:  return "uv-animado";
+        case RejectScript:      return "script-textura";
+        case RejectNoneBlend:   return "noneblendmesh";
+        case RejectTexture:     return "textura";
+        default:                return "?";
+        }
+    }
+
+    // Escreve no MuError.log uma linha por combinacao (modelo, motivo) NOVA, com teto.
+    // Dedup porque a chamada acontece centenas de vezes por frame: sem ele o log viraria
+    // gigabytes e a informacao -- que e o CONJUNTO de motivos, nao a frequencia -- ficaria
+    // ilegivel. So roda em captura (-renderstatscsv), para nao poluir log de jogador.
+    void LogGpuMaterialReject(int modelId, int unsupportedFlags, bool paletteOk, bool textured,
+        float alpha, int blendMeshIndex, int meshTexture, float blendCoordU, float blendCoordV,
+        bool scriptCompatible, bool noneBlendMesh, const BITMAP_t* texture)
+    {
+        static const bool enabled = (::strstr(::GetCommandLineA(), "-renderstatscsv") != NULL);
+        if (!enabled) return;
+
+        const int kMaxLogged = 64;
+        static int seenModel[kMaxLogged];
+        static int seenMask[kMaxLogged];
+        static int seenCount = 0;
+
+        // Contagem por motivo, dimensionando o premio. Saber que CHROME4 reprova nao diz
+        // se ele e 10% ou 90% das 824 sub-malhas por frame -- e sem isso nao se sabe se
+        // consertar a condicao vale o trabalho. Resumo a cada 600 frames, em media por
+        // frame, na mesma linha para nao encher o log.
+        static unsigned long long rejectCount[10] = { 0 };
+        static unsigned long long rejectTotal = 0;
+        static unsigned int lastDumpFrame = 0;
+        {
+            const unsigned int frame = (unsigned int)Platform::GetRenderFrameIndex();
+            if (lastDumpFrame == 0) lastDumpFrame = frame;
+            if (frame - lastDumpFrame >= 600)
+            {
+                const double frames = (double)(frame - lastDumpFrame);
+                char summary[512];
+                sprintf(summary, "[GpuSkinReject] media/frame em %d frames: total %.0f", (int)frames,
+                    rejectTotal / frames);
+                int index = 0;
+                for (int bit = 1; bit <= RejectTexture; bit <<= 1, ++index)
+                {
+                    if (rejectCount[index] == 0) continue;
+                    char part[64];
+                    sprintf(part, "  %s %.0f", GpuMaterialRejectName(bit), rejectCount[index] / frames);
+                    strcat(summary, part);
+                }
+                strcat(summary, "\r\n");
+                g_ErrorReport.Write(summary);
+                for (int i = 0; i < 10; ++i) rejectCount[i] = 0;
+                rejectTotal = 0;
+                lastDumpFrame = frame;
+            }
+        }
+
+        int mask = 0;
+        if (!paletteOk)                                        mask |= RejectPalette;
+        if (!textured)                                         mask |= RejectUntextured;
+        if (unsupportedFlags != 0)                             mask |= RejectRenderFlags;
+        if (alpha < 0.99f)                                     mask |= RejectAlpha;
+        if (!(blendMeshIndex == -1 || blendMeshIndex <= -2 || meshTexture == blendMeshIndex))
+                                                               mask |= RejectBlendMesh;
+        if (blendCoordU != 0.f || blendCoordV != 0.f)           mask |= RejectBlendCoord;
+        if (!scriptCompatible)                                 mask |= RejectScript;
+        if (noneBlendMesh)                                     mask |= RejectNoneBlend;
+        if (texture == NULL || (texture->Components != 3 && texture->Components != 4))
+                                                               mask |= RejectTexture;
+        if (mask == 0) return;   // reprovou por condicao que este diagnostico nao cobre
+
+        // Contabiliza ANTES do dedup: o resumo quer frequencia, a listagem quer variedade.
+        ++rejectTotal;
+        {
+            int index = 0;
+            for (int bit = 1; bit <= RejectTexture; bit <<= 1, ++index)
+            {
+                if ((mask & bit) != 0) ++rejectCount[index];
+            }
+        }
+
+        for (int i = 0; i < seenCount; ++i)
+        {
+            if (seenModel[i] == modelId && seenMask[i] == mask) return;
+        }
+        if (seenCount >= kMaxLogged)
+            return;
+        seenModel[seenCount] = modelId;
+        seenMask[seenCount] = mask;
+        ++seenCount;
+
+        char reasons[256];
+        reasons[0] = 0;
+        for (int bit = 1; bit <= RejectTexture; bit <<= 1)
+        {
+            if ((mask & bit) == 0) continue;
+            if (reasons[0] != 0) strcat(reasons, "+");
+            strcat(reasons, GpuMaterialRejectName(bit));
+        }
+
+        char line[512];
+        sprintf(line, "[GpuSkinReject] modelo %d: %s (renderflags nao suportadas 0x%X)\r\n",
+            modelId, reasons, (unsigned int)unsupportedFlags);
+        g_ErrorReport.Write(line);
+    }
+}
+
 void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshIndex, float blendMeshAlpha, float blendMeshTextureCoordU, float blendMeshTextureCoordV, int explicitTextureIndex)
 {
     if (meshIndex >= NumMeshs || meshIndex < 0) return;
@@ -1726,6 +1872,23 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         Platform::RecordGpuSkinningFallback(!gpuPaletteSupported || (staticGpuCandidate && !gpuMeshPrepared)
             ? Platform::GpuSkinningFallbackGeometry
             : (!staticGpuCandidate ? Platform::GpuSkinningFallbackMaterial : Platform::GpuSkinningFallbackResource));
+
+        // Diagnostico de uma pergunta so: QUAL condicao de staticGpuCandidate reprova.
+        //
+        // A captura de 2026-08-10 mostrou 824 sub-malhas por frame caindo em
+        // gpu_skinning_material_fallbacks -- 100% por material, zero por geometria ou
+        // recurso -- com a GPU ociosa (us_present 51 us). Ou seja: o skinning de
+        // personagem roda na CPU inteiro apesar de -gpuskinning=on. Nao ha o que fazer
+        // com esse numero sem saber a condicao, e sao doze.
+        //
+        // Log em vez de coluna de CSV de proposito: a pergunta e pontual. Respondida,
+        // o trabalho e consertar a condicao, nao acompanhar a metrica.
+        if (!staticGpuCandidate)
+            LogGpuMaterialReject(modelId, renderFlags & ~gpuSupportedMaterialFlags,
+                gpuPaletteSupported,
+                ((renderFlags & RENDER_TEXTURE) != 0 || gpuMaterialEffect != 0 || gpuUntexturedBright),
+                alpha, blendMeshIndex, m->Texture, blendMeshTextureCoordU, blendMeshTextureCoordV,
+                gpuScriptCompatible, m->NoneBlendMesh != 0, gpuTexture);
     }
 
     // Daqui para baixo e o caminho legado, que le VertexTransform e companhia.

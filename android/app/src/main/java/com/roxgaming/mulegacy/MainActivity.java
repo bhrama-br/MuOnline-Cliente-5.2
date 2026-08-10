@@ -268,6 +268,20 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             }
         }
 
+        // MainInfo.ini vive na RAIZ dos dados, fora de Data, e por isso NAO vem na
+        // extracao acima -- ela percorre so a subarvore "Data". Tambem vale no caminho
+        // dos dados externos, onde nada e extraido.
+        //
+        // Sem este arquivo o Android fica sem canal de configuracao: aqui nao ha linha
+        // de comando, e as chaves [Render] (Crowd LOD) ficariam presas ao default
+        // compilado. extractAssets nao sobrescreve arquivo ja existente, entao um
+        // MainInfo.ini empurrado com adb push ganha do empacotado.
+        try {
+            extractAssets("MainInfo.ini", dataRoot);
+        } catch (IOException error) {
+            Log.e("MuLegacy", "falha ao extrair MainInfo.ini", error);
+        }
+
         if (!libraryLoaded) {
             try {
                 // Lida pelo construtor de prioridade 101 em AndroidPlatform.cpp,

@@ -141,17 +141,19 @@ Para uma reconfiguração Web completa, remova somente o conteúdo gerado de `bu
 
 ### Otimizações por fase
 
-Cada uma aceita `off|on|compare` e **vem desligada por padrão**. `compare` alterna
-por frame contra o caminho antigo, então qualquer divergência aparece como
-cintilação — é o jeito mais rápido de achar uma regressão visual.
+Cada uma aceita `off|on|compare`. `compare` alterna por frame contra o caminho
+antigo, então qualquer divergência aparece como cintilação — é o jeito mais
+rápido de achar uma regressão visual. A coluna **Padrão** vale para os três
+alvos: no Web e no Android não há linha de comando, então nenhuma flag é lida e o
+default é o que roda.
 
-| Flag | O que liga |
-| --- | --- |
-| `-statictransformcache=on` | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. |
-| `-batching=on` | Cache espelhado de uniformes, submissão de vértices em bloco, fusão de comandos adjacentes na fila de opacos e redução dos pontos de flush. |
-| `-instancing=on` | Agrupa instâncias da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. |
-| `-cpumatrices=on` | **A única com ganho medido.** Lê projeção e modelview do espelho em CPU em vez de `glGetFloatv`. Elimina os 6 pontos de sincronização por frame: `cpu_us` de 7.596 para 4.450 µs em Lorencia, −41%. Divergência contra o driver medida em 1,0e-6. |
-| `-meshcache=on` | Deduplicação de cantos e índices de 16 bits na malha residente. **Nasce ligada** — já estava em produção sem chave; o interruptor serve para desligar. |
+| Flag | Padrão | O que liga |
+| --- | --- | --- |
+| `-statictransformcache=on` | off | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. |
+| `-batching=on` | **on** | Cache espelhado de uniformes, submissão de vértices em bloco, fusão de comandos adjacentes na fila de opacos e redução dos pontos de flush. Em mundo 2 cena 5: draws de 4.366 → ~1.835 por frame, `flush_matrix` de 449 → 0, ~20.000 chamadas de uniforme evitadas por frame. `-batching=off` reverte. |
+| `-instancing=on` | **on** | Agrupa instâncias da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. Ligada por decisão de projeto, **não por ganho medido**: em `RenderPerformance_v16` rendeu 2–3 draws instanciados por frame cobrindo 4–6 objetos (`instance_batch_max = 2`), e em mundo 94 (sem personagens, ~55 draws) a captura ligada ficou 10% mais lenta. `-instancing=off` reverte. |
+| `-cpumatrices=on` | **on** | Lê projeção e modelview do espelho em CPU em vez de `glGetFloatv`. Elimina os 6 pontos de sincronização por frame: `cpu_us` de 7.596 para 4.450 µs em Lorencia, −41%. Divergência contra o driver medida em 1,0e-6. |
+| `-meshcache=on` | **on** | Deduplicação de cantos e índices de 16 bits na malha residente. Já estava em produção sem chave; o interruptor serve para desligar. |
 
 Escada de rollout sugerida, a mesma já validada pelo GPU skinning: `off` →
 `compare` nas cenas de referência → `on` em QA → `on` em produção.
@@ -221,6 +223,96 @@ ganho mágico, mesma regra do `render_scale`.
 Compare por `fps_min` e `frame_total_us_max`, não pela média: o sintoma é um
 mergulho transitório e a média de 120 frames o dilui.
 
+### Crowd LOD (personagens)
+
+Objetivo: fazer 100–200 personagens visíveis caberem no orçamento de frame nos três
+alvos. Plano completo e invariantes em `CROWD_LOD_PLAN.md`.
+
+**A Fase 0 está no código e ela não corta nada.** `-crowdlod` existe, o default é
+`off`, e nenhum caminho de render consulta o nível de LOD ainda. O que a fase entrega
+são os contadores: sem eles não se sabe nem se o custo por personagem está na pose, no
+equipamento ou na sombra, e o projeto já retratou uma conclusão inteira por medir a
+coisa errada (commit `e3cb8b7`).
+
+| flag | efeito |
+| --- | --- |
+| `-crowdlod=off\|on\|compare` | modo do LOD. **Default `off`.** Registrado na coluna `crowd_lod`. |
+| `-crowd=N` | N players sintéticos ao redor do herói. Registrado em `crowd_spawn`. |
+| `-crowdmonsters=N` | N monstros sintéticos. Registrado em `crowd_spawn_monsters`. |
+| `-crowdnpcs=N` | N NPCs sintéticos. Registrado em `crowd_spawn_npcs`. |
+
+Ausente = 0 em todas. Os três são **independentes e combináveis** — `-crowd=100
+-crowdmonsters=100` monta uma multidão mista. Separados porque os três custam coisas
+diferentes: um player tem ~15 malhas de equipamento e passe de sombra próprio, um
+monstro tem uma malha de corpo e nenhum dos dois. Um número único não permitiria
+isolar qual deles move o frame.
+
+O rig é **instrumento, não recurso**, pela mesma razão de `-renderscale`: servidor
+povoado não é reproduzível, e sem carga repetível não há como saber se um corte de LOD
+ganhou tempo ou se a cena mudou.
+
+Como cada tipo é criado:
+
+- **Player:** `CreateCharacter` + `SetCharacterClass`, então carrega o mesmo
+  equipamento do jogador local — as ~15 malhas que `us_char_parts` mede. Um boneco
+  pelado mediria a carga errada.
+- **Monstro e NPC:** `CreateMonster`, o mesmo caminho da rede — é `Setting_Monster` que
+  define o `Kind` pela tabela de tipo, não eu. O **tipo é clonado dos que já existem
+  vivos no mapa**, e isso é essencial: um modelo de monstro que não pertence ao mapa
+  atual pode não estar carregado, e `RenderCharacter` desiste em silêncio quando
+  `Models[Type].NumActions == 0` (`ZzzCharacter.cpp:8357`) — o rig spawnaria 200
+  monstros invisíveis de custo zero e a captura mostraria um ganho que não existe. Sem
+  monstro (ou NPC) vivo no mapa, o rig **não cria nada** e diz isso no log de erro; a
+  coluna `chars_monsters_avg` denuncia, e o leitor de CSV avisa.
+
+Limites e efeitos colaterais, iguais para os três: o teto é do **total** (64 dos 400
+slots ficam reservados para jogadores de verdade, então a soma dos três entrega no
+máximo 336), a `Key` é negativa (o servidor só manda chaves positivas, então nada da
+rede colide) e, como qualquer personagem vivo, eles **bloqueiam caminho** enquanto
+existem. Monstro sintético é alvo clicável — o pacote de ataque sai para uma chave que
+o servidor não conhece e é ignorado.
+
+Configuração por arquivo, na seção `[Render]` do `MainInfo.ini`:
+`CrowdLod`, `CrowdLodPixelsL1/L2/L3`, `CrowdMaxFull`, `CrowdSpawn` (players, também
+aceita `CrowdSpawnPlayers`), `CrowdSpawnMonsters`, `CrowdSpawnNpcs`.
+Precedência: default compilado → `MainInfo.ini` → linha de comando.
+
+| alvo | canal |
+| --- | --- |
+| PC | **linha de comando.** Não há canal de arquivo: o `MainInfo` do PC é um struct binário cifrado (`CProtect::ReadMainFile`, `Data\Configs\Configs.xtm`), não texto. |
+| Web | `web/MainInfo.web.ini`, pré-carregado pelo CMake como `/MainInfo.ini`. |
+| Android | `android/app/src/main/assets/MainInfo.ini`, extraído por `MainActivity`. Contém **só** a seção `[Render]`: empacotar o `MainInfo.ini` do PC mudaria de uma vez o regime de decifragem de Lua e a versão de cliente do alvo, o que não tem relação com LOD. Um arquivo já presente na raiz de dados (via `adb push`) não é sobrescrito. |
+
+Os limiares são em **pixels de altura na tela**, não em distância crua: `CameraFOV`,
+`CameraZoom` e a resolução mudam a relação entre distância e tamanho aparente — o
+próprio `TestFrustrum2D` compensa zoom à mão. A conta usa `WindowHeight`, e **não** o
+viewport escalado, para que `-renderscale` continue variando só a contagem de pixels.
+
+Captura de base da Fase 0 — é ela que decide a ordem das fases seguintes:
+
+```
+.\Main.exe -renderstatscsv -crowd=0
+.\Main.exe -renderstatscsv -crowd=50
+.\Main.exe -renderstatscsv -crowd=100
+.\Main.exe -renderstatscsv -crowd=200
+```
+
+Player e monstro precisam de curvas **separadas** — o custo por personagem não é o
+mesmo, e uma captura mista não diz de quem é o tempo. Em mapa com monstro (Lorencia
+serve, Dungeon melhor):
+
+```
+.\Main.exe -renderstatscsv -crowdmonsters=50
+.\Main.exe -renderstatscsv -crowdmonsters=100
+.\Main.exe -renderstatscsv -crowdmonsters=200
+.\Main.exe -renderstatscsv -crowd=100 -crowdmonsters=100   # mista, para conferir se soma
+```
+
+Perguntas, nesta ordem: `frame_total_us` cresce linearmente com N ou satura? o
+crescimento está em `us_char_pose`, `us_char_parts` ou `us_char_shadow`? `us_sim_chars`
+cresce junto (aí LOD de render sozinho não fecha a conta)? `us_present` cresce (aí há
+componente de GPU — cruze com `-renderscale=50`)?
+
 ### Teto de FPS e vsync
 
 | flag | efeito |
@@ -233,7 +325,7 @@ qualquer otimização**. Registre em que regime a captura foi feita.
 
 ### Medição
 
-`-renderstatscsv` grava `RenderPerformance_v16.csv` a cada 120 frames, após 180 de
+`-renderstatscsv` grava `RenderPerformance_v17.csv` a cada 120 frames, após 180 de
 aquecimento. Além dos contadores de draw/vértice/upload, o arquivo reparte o frame
 inteiro em microssegundos, em duas camadas que fecham por construção:
 
@@ -246,7 +338,7 @@ frame_total_us = cpu_us + us_overlay + us_present + us_protocol + us_pump
 ```
 
 Se o arquivo já existir com um header **diferente**, ele é renomeado para
-`RenderPerformance_v16.oldN.csv` antes da escrita. Se a rotação falhar (o caso
+`RenderPerformance_v17.oldN.csv` antes da escrita. Se a rotação falhar (o caso
 comum é o arquivo estar aberto no Excel), a amostra é **descartada** em vez de
 anexada: perder 120 frames custa uma re-execução, gravar linha de outra largura
 custa o arquivo inteiro e produz número que parece válido. Foi assim que a
@@ -271,12 +363,59 @@ São sobreposição, não partição — **não** as inclua em nenhuma soma do f
 mesmo tempo é contado duas vezes. `us_char_parts` e `us_sim_rest` são derivadas
 por subtração.
 
+Há um **quarto** nível, com uma coluna só: `us_char_transform` aninha dentro de
+`us_char_parts` e mede o laço por vértice de `BMD::TransformVertices`. Ele existe
+porque a captura de multidão de 2026-08-10 mostrou `us_char_parts` com 83–95% de
+`us_characters` — e `us_char_parts` é subtração, então apontava o bloco dominante sem
+dizer o que tinha dentro. `us_char_parts − us_char_transform` é submissão de malha mais
+os extras por personagem (luz de terreno, ganchos de `RenderMonsterVisual`, nome,
+barra, pet, marca de guild). O leitor imprime os dois, e a divisão entre eles é o que
+decide o próximo corte.
+
 Elas existem porque `us_characters` (33,7% do frame em Lorencia) e `us_simulation`
 (15,2%, e o maior bloco de todos em world 3) eram as duas maiores fatias medidas e
 nenhuma tinha detalhamento. As perguntas que respondem: no caso de personagens, se
 o custo está no corpo/pose ou nas ~15 malhas de equipamento que um player carrega;
 no caso da simulação, se está nos objetos do mundo, nos personagens, ou no update
 de UI — que roda a cada frame mesmo a 170 FPS.
+
+A **v17** acrescenta a família de multidão. Ela não mede tempo: conta o que o frame
+fez, para que o tempo já medido possa ser dividido por algo.
+
+| coluna | conteúdo |
+| --- | --- |
+| `chars_live_avg`, `chars_visible_avg`, `chars_visible_max` | slots vivos, dentro do frustum, e o pico de visíveis (a multidão de pior caso é o que define o orçamento; a média a esconde) |
+| `chars_culled_frustum_avg` | vivos fora do frustum |
+| `chars_beyond_far_avg` | vivos além de `CameraViewFar` que **ainda são desenhados** — o teste de visibilidade de personagem é 2D e não tem plano far |
+| `chars_lod0_avg` … `chars_lod3_avg` | distribuição de níveis. Tudo em L0 significa que nenhum corte teria efeito naquela captura |
+| `chars_lod_forced_avg` | isentos de LOD: herói, alvo selecionado, party e mapas PvP |
+| `chars_players_avg`, `chars_monsters_avg`, `chars_npcs_avg`, `chars_other_avg` | composição da multidão. `other` é trap/pet/tmp/edit, e existe para a soma fechar com `chars_live` |
+| `char_poses_avg`, `char_part_meshes_avg`, `char_shadows_avg` | poses calculadas, malhas de personagem e sombras emitidas por frame |
+
+Os contadores de `chars_*` cobrem o pool inteiro — **players, monstros e NPCs**. Os
+três de trabalho não são simétricos, e ler como se fossem dá conclusão errada:
+
+- `char_poses_avg` conta os dois: `RecordCharPoseUs` embrulha `Calc_ObjectAnimation`
+  (player) e `RenderObject` (monstro/NPC).
+- `char_shadows_avg` é **só player**. O passe de `MODEL_SHADOW_BODY`
+  (`ZzzCharacter.cpp:8465`) é guardado por `o->Type==MODEL_PLAYER`; monstro não tem
+  passe separado — o `EnableShadow` dele envolve o próprio corpo (`:8546`). Mesma
+  assimetria que `us_char_shadow` já tinha.
+- `char_part_meshes_avg` conta chamadas de `RenderPartObject`: corpo do monstro
+  (`:8547`), sombra e equipamento do player. **Não vê** os modelos que desenham direto
+  por `b->RenderMesh` dentro de `Draw_RenderObject` (patente, helper, dark spirit,
+  caminho chrome). Irrelevante em Lorencia; não em mapa cheio de helpers.
+
+E `-crowd=N` spawna **só players**, porque o player é o caso caro (~15 malhas contra 1
+do monstro). Multidão de monstro — Blood Castle, Kalima — precisa de captura orgânica
+ou de um spawner próprio.
+| `crowd_lod`, `crowd_max_full`, `crowd_spawn`, `crowd_spawn_monsters`, `crowd_spawn_npcs` | regime da captura. As três de `spawn` são o que foi **pedido**; o que o rig conseguiu criar está em `chars_*_avg` |
+
+Três identidades exatas por construção, validadas por `read_render_csv.py`:
+`chars_visible + chars_culled_frustum == chars_live`, `chars_lod0..3 == chars_live` e
+`players + monsters + npcs + other == chars_live`. Se uma delas não fecha, o laço de
+personagens contou um slot duas vezes ou deixou de contar, e nem a composição nem a
+distribuição de LOD servem.
 
 As quatro colunas da camada externa (`us_overlay`, `us_present`, `us_protocol`,
 `us_pump`, `us_limiter`) medem o que acontece **depois** da leitura de `cpu_us`: o overlay de
@@ -307,4 +446,15 @@ Comece por essas colunas antes de otimizar qualquer coisa. Ver
 frame, o que ela derrubou, e como interpretar cada coluna nova da v15. Ver
 `RENDER_INSTANCING_CACHE_BATCHING_PLAN.md` para o histórico de medições —
 inclusive as otimizações que os contadores confirmaram e que **não** moveram o
-tempo de frame.
+tempo de frame. Ver `CROWD_LOD_PLAN.md` para o plano de LOD e culling de
+personagens: as invariantes que o LOD não pode violar, e por que a Fase 0 mede
+antes de cortar.
+
+Para ler uma captura:
+
+```powershell
+python diagnostic\read_render_csv.py ..\..\Client\RenderPerformance_v17.csv
+```
+
+Ele valida as identidades do CSV **antes** de imprimir a repartição. Se alguma não
+fecha, a repartição está errada e qualquer conclusão tirada dela também.

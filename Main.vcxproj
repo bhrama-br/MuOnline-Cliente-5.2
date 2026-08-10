@@ -335,6 +335,7 @@
     <ClCompile Include="source\CreditInfo.cpp" />
     <ClCompile Include="source\CreditWin.cpp" />
     <ClCompile Include="source\CriticalSection.cpp" />
+    <ClCompile Include="source\CrowdLod.cpp" />
     <ClCompile Include="source\CSChaosCastle.cpp" />
     <ClCompile Include="source\CSEventMatch.cpp" />
     <ClCompile Include="source\CSItemOption.cpp" />
@@ -800,6 +801,7 @@
     <ClInclude Include="source\CreditInfo.h" />
     <ClInclude Include="source\CreditWin.h" />
     <ClInclude Include="source\CriticalSection.h" />
+    <ClInclude Include="source\CrowdLod.h" />
     <ClInclude Include="source\CSChaosCastle.h" />
     <ClInclude Include="source\CSEventMatch.h" />
     <ClInclude Include="source\CSItemOption.h" />

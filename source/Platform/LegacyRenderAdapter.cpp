@@ -55,9 +55,18 @@ namespace
     // Enabled depois de passar pelo modo Compare nas cenas de referencia.
     Platform::RenderFeatureMode g_RenderFeatureModes[Platform::RenderFeatureCount] =
     {
-        Platform::RenderFeatureDisabled,  // RenderFeatureInstancing
+        // Ligada por decisao de projeto, nao por ganho medido. Em
+        // RenderPerformance_v16 o coletor rendeu 2 a 3 draws instanciados por
+        // frame cobrindo 4 a 6 objetos, com instance_batch_max = 2: inerte numa
+        // cena de ~1800 draws. Em mundo 94 (sem personagens, ~55 draws) a
+        // captura com a flag ligada ficou 10% mais lenta que a desligada.
+        // Quem precisar do caminho antigo usa -instancing=off.
+        Platform::RenderFeatureEnabled,   // RenderFeatureInstancing
         Platform::RenderFeatureDisabled,  // RenderFeatureStaticTransformCache
-        Platform::RenderFeatureDisabled,  // RenderFeatureBatching
+        // Ligada por padrao: em mundo 2 cena 5 baixou os draws de 4.366 para
+        // ~1.835 por frame, zerou flush_matrix (era 449) e evitou ~20.000
+        // chamadas de uniforme por frame. -batching=off reverte.
+        Platform::RenderFeatureEnabled,   // RenderFeatureBatching
         Platform::RenderFeatureEnabled,   // RenderFeatureMeshCache
         // Ligada por padrao apos a etapa compare: 50 amostras em 5 mundos e 2
         // cenas, todas com divergencia de 1,0e-6 contra o driver, e queda de
