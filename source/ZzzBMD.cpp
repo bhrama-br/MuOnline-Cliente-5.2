@@ -319,6 +319,21 @@ namespace
         int boneCount;
     };
 
+    // Algum balde pendente usa alpha test?
+    //
+    // A chave do lote NAO captura a referencia do alpha test, e ApplyInstanceBatchState
+    // chama EnableAlphaTest() sem definir referencia -- ela e herdada do GL. Isso era
+    // inofensivo enquanto os baldes viviam 2 instancias e eram descarregados a todo
+    // momento; com a descarga condicional a janela entre submissao e flush ficou longa, e
+    // codigo de mapa alterna a referencia no meio do render (GM_kanturu_1st.cpp:230 e 235
+    // trocam 0.0 por 0.25; GMDoppelGanger4.cpp:468 idem). Um balde com alpha test que
+    // atravessasse esse toggle sairia com a referencia errada -- em Kanturu e Doppelganger,
+    // NAO em Lorencia, ou seja invisivel no teste onde alguem iria olhar.
+    //
+    // Enquanto a referencia nao entrar na chave, alpha test forca descarga. Isso preserva o
+    // ganho no caso comum (malha opaca sem alpha test, que e a maioria) e elimina o risco.
+    bool g_instanceBucketHasAlphaTest = false;
+
     // Um balde por chave, nao uma corrida consecutiva. RenderCharactersClient
     // percorre o array de personagens em ordem de indice, entao instancias do
     // mesmo modelo quase nunca sao vizinhas: agrupar so consecutivas rendia 0,72
@@ -408,6 +423,10 @@ void FlushInstanceBatch()
         g_instanceBuckets[b].instances.clear();
         g_instanceBuckets[b].palettes.clear();
     }
+    // A bandeira acompanha o CONTEUDO dos baldes, entao zera junto. Sem isto ela ficaria
+    // presa em true depois da primeira malha com alpha test do frame, e a descarga
+    // condicional -- o ganho todo -- viraria codigo morto do segundo personagem em diante.
+    g_instanceBucketHasAlphaTest = false;
     g_instanceBuckets.clear();
     flushing = false;
 }
@@ -784,6 +803,8 @@ void BMD::EnsureVerticesTransformed()
 // inteira para dentro do modulo de malha -- mesmo padrao de ZzzLodTerrain.cpp:2636.
 long long FrameLoopNowMicroseconds();
 void RecordCharTransformUs(long long microseconds);
+void RecordCharBatchAccum();
+void RecordCharBatchBreak();
 
 void BMD::TransformVertices()
 {
@@ -1561,7 +1582,9 @@ namespace
         RejectUntextured  = 1 << 1,   // sem RENDER_TEXTURE, sem efeito de material, sem bright
         RejectRenderFlags = 1 << 2,   // flag de render fora da lista suportada
         RejectAlpha       = 1 << 3,   // alpha < 0.99
-        RejectBlendMesh   = 1 << 4,
+        // 1 << 4 era RejectBlendMesh. Aposentado: a condicao de blend mesh saiu de
+        // staticGpuCandidate por ser equivalente ao ramo normal do legado. O bit fica
+        // vago de proposito, para nao renumerar os outros e invalidar log antigo.
         RejectBlendCoord  = 1 << 5,   // animacao de UV
         RejectScript      = 1 << 6,   // script de textura
         RejectNoneBlend   = 1 << 7,
@@ -1576,7 +1599,6 @@ namespace
         case RejectUntextured:  return "sem-textura";
         case RejectRenderFlags: return "renderflags";
         case RejectAlpha:       return "alpha<0.99";
-        case RejectBlendMesh:   return "blendmesh";
         case RejectBlendCoord:  return "uv-animado";
         case RejectScript:      return "script-textura";
         case RejectNoneBlend:   return "noneblendmesh";
@@ -1590,7 +1612,7 @@ namespace
     // gigabytes e a informacao -- que e o CONJUNTO de motivos, nao a frequencia -- ficaria
     // ilegivel. So roda em captura (-renderstatscsv), para nao poluir log de jogador.
     void LogGpuMaterialReject(int modelId, int unsupportedFlags, bool paletteOk, bool textured,
-        float alpha, int blendMeshIndex, int meshTexture, float blendCoordU, float blendCoordV,
+        float alpha, float blendCoordU, float blendCoordV,
         bool scriptCompatible, bool noneBlendMesh, const BITMAP_t* texture)
     {
         static const bool enabled = (::strstr(::GetCommandLineA(), "-renderstatscsv") != NULL);
@@ -1638,8 +1660,6 @@ namespace
         if (!textured)                                         mask |= RejectUntextured;
         if (unsupportedFlags != 0)                             mask |= RejectRenderFlags;
         if (alpha < 0.99f)                                     mask |= RejectAlpha;
-        if (!(blendMeshIndex == -1 || blendMeshIndex <= -2 || meshTexture == blendMeshIndex))
-                                                               mask |= RejectBlendMesh;
         if (blendCoordU != 0.f || blendCoordV != 0.f)           mask |= RejectBlendCoord;
         if (!scriptCompatible)                                 mask |= RejectScript;
         if (noneBlendMesh)                                     mask |= RejectNoneBlend;
@@ -1728,8 +1748,31 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
     // skinning CPU de personagens; a paleta entrara na Fase 2.
     int gpuMaterialEffect = 0;
     int gpuTextureIndex = textureIndex;
-    if ((renderFlags & RENDER_CHROME) != 0) { gpuMaterialEffect = 1; gpuTextureIndex = BITMAP_CHROME; }
-    else if ((renderFlags & RENDER_CHROME2) != 0) { gpuMaterialEffect = 2; gpuTextureIndex = BITMAP_CHROME2; }
+    // A ORDEM aqui e a mesma da cadeia de UV do caminho legado (linhas 2015-2058):
+    // CHROME2 > CHROME4 > CHROME6 > OIL > CHROME, com METAL caindo na formula neutra.
+    // Antes desta mudanca a ordem comecava por CHROME, o que divergia do legado para
+    // malha com CHROME e CHROME2 juntos -- inofensivo enquanto CHROME4 reprovava o
+    // material e mandava tudo para a CPU, e um bug latente depois que ele passa a
+    // qualificar. `-gpuskinning=compare` alterna os dois caminhos por frame, entao
+    // qualquer divergencia de UV aparece como cintilacao.
+    //
+    // CHROME4 e CHROME6 entraram porque o diagnostico [GpuSkinReject] mostrou que as
+    // cinco pecas de armadura de cada player sao desenhadas com CHROME4, e isso
+    // reprovava o material por DOIS motivos ao mesmo tempo: a flag fora da lista
+    // suportada e, por consequencia, "sem textura" (gpuMaterialEffect == 0 sem
+    // RENDER_TEXTURE). Um mapeamento resolve os dois.
+    //
+    // Ficam DE FORA, com motivo:
+    //   CHROME3 -- a UV depende de LightVector, um global que o shader nao recebe.
+    //              Entra junto com o uniforme, nao antes.
+    //   CHROME5, CHROME7 -- o caminho legado NAO faz bind de textura para eles
+    //              (linhas 2100-2126): a malha herda a textura de quem desenhou antes.
+    //              Isso nao e reproduzivel num lote, e copiar o comportamento exigiria
+    //              rastrear estado global de textura. Continuam na CPU de proposito.
+    if ((renderFlags & RENDER_CHROME2) != 0) { gpuMaterialEffect = 2; gpuTextureIndex = BITMAP_CHROME2; }
+    else if ((renderFlags & RENDER_CHROME4) != 0) { gpuMaterialEffect = 5; gpuTextureIndex = BITMAP_CHROME2; }
+    else if ((renderFlags & RENDER_CHROME6) != 0) { gpuMaterialEffect = 6; gpuTextureIndex = BITMAP_CHROME6; }
+    else if ((renderFlags & RENDER_CHROME) != 0) { gpuMaterialEffect = 1; gpuTextureIndex = BITMAP_CHROME; }
     else if ((renderFlags & RENDER_METAL) != 0) { gpuMaterialEffect = 3; gpuTextureIndex = BITMAP_SHINY; }
     else if ((renderFlags & RENDER_OIL) != 0) gpuMaterialEffect = 4;
     const BITMAP_t* gpuTexture = gpuMaterialEffect != 0 ? Bitmaps.GetTexture(gpuTextureIndex) : texture;
@@ -1742,8 +1785,12 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         (!m->m_csTScript->getHiddenMesh() && !m->m_csTScript->getStreamMesh() &&
          !m->m_csTScript->getNoneBlendMesh() &&
          (m->m_csTScript->getShadowMesh() == SHADOW_NONE || (renderFlags & RENDER_SHADOWMAP) != 0));
+    // CHROME4 e CHROME6 acrescentados junto com o mapeamento de gpuMaterialEffect acima:
+    // sem estar aqui, a flag reprova o material e a malha volta para a CPU mesmo tendo
+    // efeito mapeado. CHROME3, CHROME5 e CHROME7 seguem fora, pelos motivos listados lá.
     const int gpuSupportedMaterialFlags = RENDER_TEXTURE | RENDER_BRIGHT | RENDER_DARK | RENDER_NODEPTH | RENDER_WAVE |
-        RENDER_CHROME | RENDER_CHROME2 | RENDER_METAL | RENDER_OIL | RENDER_SHADOWMAP | RENDER_LIGHTMAP;
+        RENDER_CHROME | RENDER_CHROME2 | RENDER_CHROME4 | RENDER_CHROME6 |
+        RENDER_METAL | RENDER_OIL | RENDER_SHADOWMAP | RENDER_LIGHTMAP;
     // O bloco BmdBones do shader possui 600 vec4: tres linhas para cada um
     // dos 200 ossos. Modelos acima disso mantem o caminho CPU ate haver
     // divisao por paleta/submalha.
@@ -1753,7 +1800,23 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
         && GpuBoneMatrices != NULL && GpuBoneMatrixCount > 0 && gpuPaletteSupported
         && ((renderFlags & RENDER_TEXTURE) != 0 || gpuMaterialEffect != 0 || gpuUntexturedBright)
         && (renderFlags & ~gpuSupportedMaterialFlags) == 0 && alpha >= 0.99f
-        && (blendMeshIndex == -1 || blendMeshIndex <= -2 || m->Texture == blendMeshIndex)
+        // A condicao de blend mesh que existia aqui era
+        //     (blendMeshIndex == -1 || blendMeshIndex <= -2 || m->Texture == blendMeshIndex)
+        // e reprovava as sub-malhas NAO-blend de qualquer modelo que tivesse blend mesh --
+        // 272 das 421 sub-malhas por frame que ainda caem na CPU, 65% do que restou depois
+        // do conserto de CHROME4.
+        //
+        // Por que sair: o legado escolhe estado em tres ramos (:2119 chrome/metal,
+        // :2159 blend mesh, :2179 normal). Uma sub-malha com blendMeshIndex >= 0 e
+        // m->Texture != blendMeshIndex cai no ramo NORMAL, cujo estado e identico ao de um
+        // modelo sem blend mesh nenhum -- o valor de blendMeshIndex nao entra em nada ali.
+        // Ou seja: a condicao excluia um caso que ja era equivalente.
+        //
+        // O que continua guardando os casos que NAO sao equivalentes:
+        //   `blendLight` (:1819) ja distingue blend de normal e aplica blendMeshAlpha so
+        //     no primeiro, entao o caminho de GPU nao perde a modulacao;
+        //   a condicao de UV abaixo continua reprovando quem tem coordenada animada, que e
+        //     exatamente a que ativa EnableWave (:1952) -- entao esse caso nao escapa.
         && blendMeshTextureCoordU == 0.f && blendMeshTextureCoordV == 0.f
         && gpuScriptCompatible && !m->NoneBlendMesh && gpuTexture != NULL
         && (gpuTexture->Components == 3 || gpuTexture->Components == 4);
@@ -1854,10 +1917,51 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
             bucket->palettes.resize(base + paletteFloats);
             memcpy(&bucket->palettes[base], &GpuBoneMatrices[0][0][0], paletteFloats * sizeof(float));
             bucket->instances.push_back(instance);
+            if (key.blendMode == InstanceBlendAlphaTest)
+                g_instanceBucketHasAlphaTest = true;
+            // Sequencia de malhas que o coletor conseguiu acumular. Ver o par em
+            // RecordCharBatchBreak: juntos eles dao o comprimento de sequencia, que e o que
+            // decide se reordenar a emissao renderia lote maior ou nao.
+            RecordCharBatchAccum();
             return;
         }
 
-        FlushInstanceBatch();
+        // O coletor so precisa ser esvaziado quando a ORDEM importa.
+        //
+        // O balde pendente e sempre opaco e reordenavel -- e a condicao para entrar nele
+        // (IsReorderableInstanceMaterial: depthTest, depthMask, blend None ou AlphaTest).
+        // Se o desenho atual tambem for opaco e reordenavel, a ordem entre ele e o balde e
+        // indiferente: o teste de profundidade resolve. Descarregar ali era desperdicio, e e
+        // a razao pela qual `instance_batch_max` nunca passava de 2 -- qualquer malha nao
+        // instanciavel (modelo fora da whitelist, ossos acima do teto da paleta) zerava o
+        // balde mesmo sendo opaca.
+        //
+        // Se o atual NAO for reordenavel (transparente), o balde opaco tem de sair PRIMEIRO:
+        // compor blend antes dos opacos que ficam atras dele daria o fundo errado. Essa e
+        // exatamente a politica de IsOpaqueBefore em RenderPipeline.cpp:12 -- opacos podem
+        // ser reordenados, transparentes seguem a ordem de emissao.
+        //
+        // O estado do lote e capturado por VALOR e reaplicado no flush (ver o comentario do
+        // coletor), entao adiar nao depende de nada ter permanecido no GL.
+        //
+        // Reversivel por `-instancing=off`, mas NAO por uma guarda em volta deste bloco --
+        // e por consequencia: com instancing off, ShouldInstanceModel reprova tudo, nada
+        // entra no balde, e adiar o flush de um balde vazio e no-op. Quem ler procurando um
+        // `if (instancing)` aqui nao vai achar; a reversao vem de o balde nao existir.
+        //
+        // `-instancing=compare` alterna por frame e qualquer divergencia aparece como
+        // cintilacao. Aqui piscar e BUG, ao contrario de `-crowdlod=preview`.
+        // `|| g_instanceBucketHasAlphaTest`: ver o comentario da bandeira. Sem isso o
+        // ganho viria acompanhado de um bug de referencia de alpha test em dois mapas.
+        const bool orderMattersHere = !IsReorderableInstanceMaterial(key)
+            || g_instanceBucketHasAlphaTest;
+        if (orderMattersHere)
+        {
+            // So conta como quebra quando de fato descarregou: senao a coluna
+            // char_batch_breaks mediria a intencao, nao o que aconteceu.
+            RecordCharBatchBreak();
+            FlushInstanceBatch();
+        }
         ApplyInstanceBatchState(key);
         const float color[4] = { BodyLight[0] * blendLight, BodyLight[1] * blendLight, BodyLight[2] * blendLight, alpha };
         if (renderer.DrawStaticMesh(m->GpuMeshHandle, color, &GpuStaticMatrix[0][0], &GpuBoneMatrices[0][0][0], GpuBoneMatrixCount,
@@ -1887,7 +1991,7 @@ void BMD::RenderMesh(int meshIndex, int renderFlags, float alpha, int blendMeshI
             LogGpuMaterialReject(modelId, renderFlags & ~gpuSupportedMaterialFlags,
                 gpuPaletteSupported,
                 ((renderFlags & RENDER_TEXTURE) != 0 || gpuMaterialEffect != 0 || gpuUntexturedBright),
-                alpha, blendMeshIndex, m->Texture, blendMeshTextureCoordU, blendMeshTextureCoordV,
+                alpha, blendMeshTextureCoordU, blendMeshTextureCoordV,
                 gpuScriptCompatible, m->NoneBlendMesh != 0, gpuTexture);
     }
 

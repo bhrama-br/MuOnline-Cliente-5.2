@@ -53,6 +53,11 @@ void RecordCharDrawUs(long long microseconds);
 // `us_char_mesh`, e sim ao lado dele dentro de `us_char_parts`.
 void RecordCharLinkUs(long long microseconds);
 
+// Só o desenho dentro de RenderLinkObject. Aninha em `us_char_link`, e a subtracao
+// `us_char_link - us_char_link_draw` e o preparo: PlayAnimation, Animation e Transform da
+// arma. Separa "matriz de osso, talvez cacheavel" de "emissao de geometria".
+void RecordCharLinkDrawUs(long long microseconds);
+
 // Tempo dentro de RenderPartObject (emissao de malha de personagem). Aninha dentro de
 // `us_char_parts` e CONTEM `us_char_transform` quando a transformacao e diferida --
 // nesse regime o laco roda dentro da submissao. Logo:
@@ -65,6 +70,11 @@ void RecordCharMeshUs(long long microseconds);
 // o bloco dominante da captura de multidao -- e que, sendo subtracao, nao dizia o que
 // tinha dentro. Guardada pela fase Characters, mesma regra das duas acima.
 void RecordCharTransformUs(long long microseconds);
+
+// Sequencias que o coletor de instancias acumula, dentro da fase Characters. O
+// comprimento medio (accum/breaks) diz se reordenar a emissao renderia lote maior.
+void RecordCharBatchAccum();
+void RecordCharBatchBreak();
 
 // Contagem de malhas de personagem do frame (colunas de Crowd LOD no CSV).
 // Chamada de RenderPartObject e guardada pela fase Characters, mesma regra das

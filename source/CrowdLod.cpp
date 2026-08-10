@@ -109,7 +109,11 @@ namespace CrowdLod
 		switch (GetState().mode)
 		{
 		case ModeOn:      return "on";
-		case ModeCompare: return "compare";
+		// "preview" e nao "compare": e o que a coluna crowd_lod do CSV vai registrar, e
+		// uma captura em modo alternado nao mede nem o corte nem a ausencia dele -- ela
+		// mede a media dos dois. Nomear direito evita alguem comparar essa linha com uma
+		// de `on` como se fossem o mesmo regime.
+		case ModeCompare: return "preview";
 		default:          return "off";
 		}
 	}
@@ -228,7 +232,17 @@ namespace CrowdLod
 		if (modeArgument != NULL)
 		{
 			modeArgument += strlen("-crowdlod=");
+			// `preview` e o nome certo para o modo alternado, e `compare` fica como
+			// sinonimo aceito.
+			//
+			// POR QUE DOIS NOMES: nas outras flags do projeto (-gpuskinning, -cpumatrices,
+			// -statictransformcache) `compare` alterna dois caminhos que DEVERIAM ficar
+			// identicos, e piscar significa BUG. Aqui os dois caminhos sao
+			// intencionalmente diferentes -- piscar e o efeito, nao o defeito. A mesma
+			// palavra com significado oposto ja enganou uma vez, no dia em que isto foi
+			// escrito: o operador rodou `compare`, viu asa piscando e leu como falha.
 			if      (::strncmp(modeArgument, "off", 3) == 0)     SetMode(ModeOff);
+			else if (::strncmp(modeArgument, "preview", 7) == 0) SetMode(ModeCompare);
 			else if (::strncmp(modeArgument, "compare", 7) == 0) SetMode(ModeCompare);
 			else if (::strncmp(modeArgument, "on", 2) == 0)      SetMode(ModeOn);
 		}
@@ -246,6 +260,14 @@ namespace CrowdLod
 		const char* npcs = ::strstr(commandLine, "-crowdnpcs=");
 		if (npcs != NULL)
 			SetSpawnRequest(KindNpc, atoi(npcs + strlen("-crowdnpcs=")));
+
+		// Teto por contagem. Sem ele o corte de LOD e inalcancavel no PC: a chave existia
+		// so no [Render] do MainInfo.ini, e o PC nao tem canal de arquivo -- entao o corte
+		// que consome este valor nunca disparava. Limiar por distancia nao substitui: na
+		// captura de 2026-08-10, 175 de 175 personagens ficaram em L0.
+		const char* maxFull = ::strstr(commandLine, "-crowdmaxfull=");
+		if (maxFull != NULL)
+			SetMaxFull(atoi(maxFull + strlen("-crowdmaxfull=")));
 	}
 
 	float ScreenPixels(float distance, float viewportHeight, float fieldOfViewDegrees)

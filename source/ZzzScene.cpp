@@ -179,6 +179,12 @@ enum RenderPhaseId
 	// de arma caia no bucket de subtracao e eu o atribui a nome/barra/pet.
 	RenderPhaseCharLink,
 
+	// O desenho dentro de RenderLinkObject, aninhado em RenderPhaseCharLink. Existe
+	// porque us_char_link virou o maior bloco INDIVISO do frame depois dos consertos de
+	// GPU skinning, e ele mistura preparo de matriz de osso com emissao de geometria --
+	// duas coisas com consertos completamente diferentes.
+	RenderPhaseCharLinkDraw,
+
 	// Detalhe de us_simulation, o segundo maior bloco em Lorencia (15,2%) e o
 	// MAIOR de todos em world 3 (1.440 us, acima de us_characters). Nenhuma das
 	// cinco fases do plano original olhou para ele: nao e render, e logica de
@@ -331,6 +337,37 @@ void RecordCharShadowUs(long long microseconds)
 //
 // Custo do proprio instrumento: duas leituras de relogio por chamada, e a captura de
 // multidao mostrou 366-679 chamadas por frame -- ordem de 20-40 us num frame de 26 ms.
+// Sequencias que o coletor de instancias consegue acumular, dentro da fase Characters.
+//
+// A PERGUNTA: `instanced_draws` e 2 com 59 personagens, e o diagnostico diz que o coletor e
+// esvaziado por malha que compoe com o framebuffer. Reordenar a emissao para agrupar as
+// reordenaveis renderia lote grande -- ou as reordenaveis vem uma-a-uma intercaladas e nao
+// ha lote possivel? Comprimento medio de sequencia responde, e sem refatorar nada.
+//
+// `accum` conta malha que entrou num balde; `breaks` conta malha que forcou descarga. O
+// comprimento medio e accum/breaks, e o pico diz se existe caso bom escondido na media.
+//
+// So mede com -instancing=on: com off, ShouldInstanceModel reprova tudo e nada acumula.
+static unsigned long long g_charBatchAccum = 0;
+static unsigned long long g_charBatchBreaks = 0;
+static unsigned long long g_charBatchRunMax = 0;
+static unsigned long long g_charBatchRunCurrent = 0;
+
+void RecordCharBatchAccum()
+{
+	if (g_charactersPhaseDepth <= 0) return;
+	++g_charBatchAccum;
+	++g_charBatchRunCurrent;
+	if (g_charBatchRunCurrent > g_charBatchRunMax) g_charBatchRunMax = g_charBatchRunCurrent;
+}
+
+void RecordCharBatchBreak()
+{
+	if (g_charactersPhaseDepth <= 0) return;
+	++g_charBatchBreaks;
+	g_charBatchRunCurrent = 0;
+}
+
 void RecordCharTransformUs(long long microseconds)
 {
 	if (microseconds > 0 && g_charactersPhaseDepth > 0)
@@ -355,6 +392,12 @@ void RecordCharLinkUs(long long microseconds)
 {
 	if (microseconds > 0 && g_charactersPhaseDepth > 0)
 		g_renderPhaseUs[RenderPhaseCharLink] += microseconds;
+}
+
+void RecordCharLinkDrawUs(long long microseconds)
+{
+	if (microseconds > 0 && g_charactersPhaseDepth > 0)
+		g_renderPhaseUs[RenderPhaseCharLinkDraw] += microseconds;
 }
 
 // Malhas de personagem emitidas no frame. Instrumentado em RenderPartObject, um
@@ -3466,7 +3509,7 @@ static const char* const kRenderCsvPath = "RenderPerformance_v17.csv";
 // nao apenas escrito. Manter as duas copias sincronizadas a mao foi como o v15
 // se corrompeu.
 static const char* const kRenderCsvHeader =
-	"scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,mesh_cache,cpu_matrices,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_water,us_ui,us_framebegin,us_unmeasured,us_overlay,us_present,us_protocol,us_pump,us_limiter,us_frame_gap,us_char_pose,us_char_shadow,us_char_parts,us_char_transform,us_char_mesh,us_char_draw,us_char_link,us_sim_ui,us_sim_objects,us_sim_chars,us_sim_effects,us_sim_rest,phase_nesting,us_matrix_readback,matrix_readback_calls,cpu_matrix_divergence_rel,gpu_us,gpu_timer_state,render_scale,vsync,fps_limit,frame_total_us,frame_total_us_max,us_present_max,us_effects_max,effects_live_avg,effects_live_max,wheel_trails_avg,wheel_trails_max,wheel_trail_cap,crowd_lod,crowd_spawn,crowd_spawn_monsters,crowd_spawn_npcs,crowd_max_full,chars_live_avg,chars_visible_avg,chars_visible_max,chars_culled_frustum_avg,chars_beyond_far_avg,chars_lod_forced_avg,chars_players_avg,chars_monsters_avg,chars_npcs_avg,chars_other_avg,chars_lod0_avg,chars_lod1_avg,chars_lod2_avg,chars_lod3_avg,char_poses_avg,char_part_meshes_avg,char_shadows_avg,fps,fps_period,fps_min\n";
+	"scene,world,resolution,backend,gpu_skinning,instancing,transform_cache,batching,mesh_cache,cpu_matrices,frames,cpu_us_avg,cpu_us_p95,draws_avg,vertices_avg,vbo_kb_avg,buffer_data_avg,buffer_sub_data_avg,flushes_avg,texture_uploads_avg,texture_kb_avg,texture_changes_avg,flush_matrix_avg,flush_texture_avg,flush_blend_avg,flush_depth_avg,flush_alpha_avg,flush_fog_avg,gpu_mesh_draws_avg,gpu_mesh_indices_avg,gpu_mesh_upload_kb_avg,bone_palette_kb_avg,cpu_skinning_vertices_avg,cpu_skinning_normals_avg,gpu_skinning_fallbacks_avg,gpu_skinning_material_fallbacks_avg,gpu_skinning_geometry_fallbacks_avg,gpu_skinning_resource_fallbacks_avg,instanced_draws_avg,instances_avg,instance_batches_avg,instance_batch_max,instance_palette_dedup_avg,mesh_cache_hits_avg,mesh_cache_misses_avg,mesh_vertices_resident,mesh_indices_resident,transforms_exec_avg,transforms_skipped_avg,animations_exec_avg,animations_skipped_avg,uniform_calls_saved_avg,us_terrain,us_objects,us_characters,us_effects,us_sprites,us_simulation,us_select,us_setup_gl,us_frustum,us_misc,us_water,us_ui,us_framebegin,us_unmeasured,us_overlay,us_present,us_protocol,us_pump,us_limiter,us_frame_gap,us_char_pose,us_char_shadow,us_char_parts,us_char_transform,us_char_mesh,us_char_draw,us_char_link,us_char_link_draw,us_sim_ui,us_sim_objects,us_sim_chars,us_sim_effects,us_sim_rest,phase_nesting,us_matrix_readback,matrix_readback_calls,cpu_matrix_divergence_rel,gpu_us,gpu_timer_state,render_scale,vsync,fps_limit,frame_total_us,frame_total_us_max,us_present_max,us_effects_max,effects_live_avg,effects_live_max,wheel_trails_avg,wheel_trails_max,wheel_trail_cap,crowd_lod,crowd_spawn,crowd_spawn_monsters,crowd_spawn_npcs,crowd_max_full,chars_live_avg,chars_visible_avg,chars_visible_max,chars_culled_frustum_avg,chars_beyond_far_avg,chars_lod_forced_avg,chars_players_avg,chars_monsters_avg,chars_npcs_avg,chars_other_avg,chars_lod0_avg,chars_lod1_avg,chars_lod2_avg,chars_lod3_avg,char_poses_avg,char_part_meshes_avg,char_shadows_avg,char_batch_accum_avg,char_batch_breaks_avg,char_batch_run_max,fps,fps_period,fps_min\n";
 
 // O header so era escrito com o arquivo vazio, entao um build com conjunto de
 // colunas diferente ANEXAVA linhas de outra largura sob o header antigo. Foi
@@ -3545,6 +3588,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			for (int i = 0; i < CrowdLod::LevelCount; ++i) charLevels[i] = 0;
 			for (int i = 0; i < CrowdLod::KindCount; ++i)  charKinds[i]  = 0;
 			charPoses = 0; charPartMeshes = 0; charShadows = 0;
+			charBatchAccum = 0; charBatchBreaks = 0; charBatchRunMax = 0;
 		}
 		unsigned long long phaseUs[RenderPhaseCount];
 		unsigned long long nestingViolations;
@@ -3562,6 +3606,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		unsigned long long charKinds[CrowdLod::KindCount];
 		unsigned long long charLevels[CrowdLod::LevelCount];
 		unsigned long long charPoses, charPartMeshes, charShadows;
+		unsigned long long charBatchAccum, charBatchBreaks, charBatchRunMax;
 		unsigned long long matrixReadbackUs;
 		unsigned long long matrixReadbackCalls;
 		unsigned long long gpuUs;
@@ -3656,6 +3701,11 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		state.charPoses += crowd.posesComputed;
 		state.charPartMeshes += crowd.partMeshes;
 		state.charShadows += crowd.shadows;
+		state.charBatchAccum += g_charBatchAccum;
+		state.charBatchBreaks += g_charBatchBreaks;
+		// Pico, nao soma: o maior lote do frame diz se existe caso bom, e a media dele
+		// entre 120 frames nao diria nada.
+		if (g_charBatchRunMax > state.charBatchRunMax) state.charBatchRunMax = g_charBatchRunMax;
 	}
 	state.gpuUs += Platform::GetLastGpuFrameTimeUs();
 	state.frameTotalUs += static_cast<unsigned long long>(g_frameTotalUs > 0 ? g_frameTotalUs : 0);
@@ -3730,7 +3780,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 		// FPS do PIOR frame da janela. E o numero que corresponde ao que o jogador
 		// sente quando reclama que "a magia derruba o FPS" -- a media nao mostra isso.
 		const double fpsWorstFrame = (state.frameTotalMax > 0) ? (1000000.0 / static_cast<double>(state.frameTotalMax)) : 0.0;
-		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.2f,%.0f,%.0f,%.6f,%.0f,%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%.1f,%.0f,%d,%s,%d,%d,%d,%d,%.1f,%.1f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\n",
+		fprintf(file, "%d,%d,%dx%d,%s,%s,%s,%s,%s,%s,%s,120,%.2f,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.2f,%.0f,%.0f,%.6f,%.0f,%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%.0f,%.1f,%.0f,%.1f,%.0f,%d,%s,%d,%d,%d,%d,%.1f,%.1f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.0f,%.1f,%.1f,%.1f\n",
 			scene, world, width, height, glslBackend ? "glsl" : "fixed", skinningMode,
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureInstancing),
 			Platform::GetRenderFeatureModeName(Platform::RenderFeatureStaticTransformCache),
@@ -3768,6 +3818,7 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			state.phaseUs[RenderPhaseCharMesh] / 120.0,
 			state.phaseUs[RenderPhaseCharDraw] / 120.0,
 			state.phaseUs[RenderPhaseCharLink] / 120.0,
+			state.phaseUs[RenderPhaseCharLinkDraw] / 120.0,
 			state.phaseUs[RenderPhaseSimUi] / 120.0, state.phaseUs[RenderPhaseSimObjects] / 120.0,
 			state.phaseUs[RenderPhaseSimChars] / 120.0, state.phaseUs[RenderPhaseSimEffects] / 120.0,
 			simulationRemainder / 120.0,
@@ -3799,6 +3850,8 @@ static void CaptureRenderStatsCsv(const Platform::LegacyRenderFrameStats& stats,
 			state.charLevels[CrowdLod::LevelMinimal] / 120.0,
 			state.charLevels[CrowdLod::LevelHidden] / 120.0,
 			state.charPoses / 120.0, state.charPartMeshes / 120.0, state.charShadows / 120.0,
+			state.charBatchAccum / 120.0, state.charBatchBreaks / 120.0,
+			static_cast<double>(state.charBatchRunMax),
 			state.fpsTotal / 120.0, fpsFromPeriod, fpsWorstFrame);
 		fclose(file);
 	}
@@ -3891,6 +3944,8 @@ void RenderScene(HDC hDC)
 	// por CaptureRenderStatsCsv depois da cena -- sem o frame de atraso das quatro
 	// colunas pos-cpu_us, porque a contagem acontece dentro da janela da cena.
 	CrowdLod::BeginFrame();
+	g_charBatchAccum = 0; g_charBatchBreaks = 0;
+	g_charBatchRunMax = 0; g_charBatchRunCurrent = 0;
 	// Transfere as fases pos-cpu_us do frame anterior. Elas foram medidas depois
 	// de o CSV ter lido o array, entao chegam com um frame de atraso.
 	for (int i = RenderPhaseInsideCount; i < RenderPhaseCount; ++i)

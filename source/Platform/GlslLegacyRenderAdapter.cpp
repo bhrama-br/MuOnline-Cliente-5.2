@@ -315,6 +315,25 @@ namespace
         "  else if (materialEffect == 2) { float w2 = mod(floor(uWorldTime), 5000.0) * 0.00024 - 0.4; vTexCoord = vec2((localNormal.z + localNormal.x) * 0.8 + w2 * 2.0, (localNormal.y + localNormal.x) + w2 * 3.0); }\n"
         "  else if (materialEffect == 3) vTexCoord = vec2(localNormal.z * 0.5 + 0.2, localNormal.y * 0.5 + 0.5);\n"
         "  else if (materialEffect == 4) vTexCoord = vec2(localNormal.x * aTexCoord.x, localNormal.y * aTexCoord.y);\n"
+        // 5 = RENDER_CHROME4, 6 = RENDER_CHROME6. Traduzidos linha a linha de
+        // ZzzBMD.cpp:2025-2042; sao a MESMA conta, so movida para a GPU. Existem porque
+        // as cinco pecas de armadura de todo player usam CHROME4, e sem mapeamento elas
+        // reprovavam o material e levavam o skinning inteiro para a CPU.
+        //
+        // `waveTime` nao envolve o modulo 10000 que a CPU aplica em `wave`, entao os dois
+        // diferem por um INTEIRO. Sob GL_REPEAT isso nao muda o pixel amostrado -- e a
+        // mesma razao por que o efeito 1 ja fecha com o legado.
+        "  else if (materialEffect == 5) {\n"
+        "    vec3 L = vec3(cos(uWorldTime * 0.001), sin(uWorldTime * 0.002), 1.0);\n"
+        "    float d = dot(localNormal, L);\n"
+        "    vTexCoord = vec2(d + localNormal.y * 0.5 + L.y * 3.0,\n"
+        "                     (1.0 - d) - (localNormal.z * 0.5 + waveTime * 3.0));\n"
+        "  }\n"
+        "  else if (materialEffect == 6) {\n"
+        "    float w6 = mod(floor(uWorldTime), 5000.0) * 0.00024 - 0.4;\n"
+        "    float c6 = (localNormal.z + localNormal.x) * 0.8 + w6 * 2.0;\n"
+        "    vTexCoord = vec2(c6, c6);\n"
+        "  }\n"
         // Distancia no espaco de visao, base do fog linear.
         "  vEyeDistance = length(eye.xyz);\n"
         "}\n";

@@ -26,6 +26,7 @@
 #include "ZzzOpenData.h"
 #include "ZzzScene.h"
 #include "CrowdLod.h"
+#include "Platform/LegacyRenderAdapter.h"   // GetRenderFrameIndex, para o modo compare
 #include "DSPlaySound.h"
 #include "wsclientinline.h"
 #include "PhysicsManager.h"
@@ -6490,6 +6491,84 @@ namespace
 		return c->Key <= kCrowdRigKeyFirst;
 	}
 
+	// Nivel de LOD por slot, preenchido no primeiro laco de RenderCharactersClient e
+	// consultado por RenderLinkObject. Array paralelo em vez de campo no CHARACTER porque
+	// aquele struct e preenchido pela rede e mexer no layout dele nao vale por um byte.
+	unsigned char g_crowdLevel[MAX_CHARACTERS_CLIENT] = { 0 };
+	float         g_crowdPixels[MAX_CHARACTERS_CLIENT] = { 0.f };
+
+	// O corte esta ativo neste frame? `compare` alterna por frame para divergencia
+	// aparecer como cintilacao -- mesma escada das outras otimizacoes do projeto.
+	bool CrowdLodCutActive()
+	{
+		const CrowdLod::Mode mode = CrowdLod::GetMode();
+		if (mode == CrowdLod::ModeOn) return true;
+		if (mode == CrowdLod::ModeCompare)
+			return (Platform::GetRenderFrameIndex() & 1) != 0;
+		return false;
+	}
+
+	// Teto por contagem: os `CrowdMaxFull` maiores na tela ficam em L0, o resto desce para
+	// L1. E a alavanca que a medicao sustenta: limiar por DISTANCIA nao dispara nesta
+	// camera -- na captura de 2026-08-10, 175 de 175 personagens ficaram em L0, porque MU
+	// mantem tudo grande na tela. Sem o teto, o LOD seria decorativo.
+	//
+	// Empate no limiar MANTEM os empatados -- a comparacao e estrita -- entao o teto pode ser
+	// excedido. Isso e escolha: desempatar por indice de slot faria o conjunto rebaixado mudar
+	// quando a rede reaproveita um slot, e um personagem parado perderia a asa de repente.
+	//
+	// O preco e que empate em massa afrouxa o teto, e por isso `pixels` e FLOAT aqui. A
+	// primeira versao guardava `(int)pixels`, o que FABRICAVA empate: um anel de personagens a
+	// mesma distancia caia todo no mesmo inteiro e o teto nao mordia nada -- exatamente o caso
+	// em que ele existe para morder. Um teste de mesa da aritmetica do limiar pegou isso, e o
+	// comentario anterior afirmava o comportamento OPOSTO ao do codigo.
+	void CrowdLodApplyBudget(const float* candidatePixels, int candidateCount)
+	{
+		// Clamp ANTES do retorno antecipado, nao depois. Na primeira versao ele vinha
+		// depois, e nesse caso um candidateCount acima do pool (impossivel hoje, mas o
+		// clamp existe justamente para o caso de deixar de ser) reduziria a contagem sem
+		// reduzir maxFull, e `candidateCount - maxFull` sairia NEGATIVO -- indice fora do
+		// array. Guarda defensiva que cria falha pior que a que previne nao e guarda.
+		if (candidateCount > MAX_CHARACTERS_CLIENT)
+			candidateCount = MAX_CHARACTERS_CLIENT;
+
+		const int maxFull = CrowdLod::GetMaxFull();
+		if (maxFull <= 0 || candidateCount <= maxFull)
+			return;
+
+		// Array de pilha, nao std::vector: isto roda TODO frame dentro do caminho de
+		// render, e a primeira versao alocava e liberava 1,6 KB no heap por frame. Nao
+		// apareceria em nenhuma coluna do CSV -- cairia em `us_characters` como custo
+		// difuso, exatamente o tipo de gasto que este projeto passou sete rodadas caçando.
+		float sorted[MAX_CHARACTERS_CLIENT];
+		memcpy(sorted, candidatePixels, sizeof(float) * (size_t)candidateCount);
+		// Crescente, sem std::greater: um `<functional>` implicito que compila hoje nos tres
+		// toolchains por transitividade nao e garantia para o proximo. O limiar e o
+		// maxFull-esimo MAIOR, que num array crescente esta em `count - maxFull`.
+		std::sort(sorted, sorted + candidateCount);
+		const float threshold = sorted[candidateCount - maxFull];
+
+		for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+		{
+			if (g_crowdPixels[i] <= 0.f) continue;                // nao e candidato
+			if (g_crowdPixels[i] >= threshold) continue;          // cabe no teto
+			if (g_crowdLevel[i] < (unsigned char)CrowdLod::LevelReduced)
+				g_crowdLevel[i] = (unsigned char)CrowdLod::LevelReduced;
+		}
+	}
+
+	// Consultada por RenderLinkObject, que recebe CHARACTER* e nao indice. A checagem de
+	// faixa nao e paranoia: RenderLinkObject tambem e chamado da criacao de personagem e
+	// da UI de item, com CHARACTER que NAO vive no pool -- ali `c - CharactersClient` seria
+	// aritmetica de ponteiro sem sentido e o indice cairia em qualquer lugar do array.
+	bool CrowdLodSkipLinkObject(const CHARACTER* c)
+	{
+		if (!CrowdLodCutActive()) return false;
+		if (c < CharactersClient || c >= CharactersClient + MAX_CHARACTERS_CLIENT) return false;
+		const int index = (int)(c - CharactersClient);
+		return g_crowdLevel[index] >= (unsigned char)CrowdLod::LevelReduced;
+	}
+
 	bool IsCrowdRigKeyInUse(short key)
 	{
 		for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
@@ -6837,6 +6916,17 @@ void RenderLinkObject(float x,float y,float z,CHARACTER *c,PART_t *f,int Type,in
 	// de arma sozinho ja era >= 6,3 ms. Agora tem coluna.
 	//
 	// RAII: a funcao tem 1.770 linhas e 9 pontos de saida.
+	// CORTE de Crowd LOD, o unico com premio grande que a medicao encontrou: arma e asa
+	// sao `us_char_link_draw` = 5,6 ms de um frame de 18,7 (30%), e 81% desse bloco e
+	// emissao de geometria -- ou seja, nao ha cache que resolva, so nao desenhar.
+	//
+	// Default `off`. Isto COLIDE com a invariante 3 do CROWD_LOD_PLAN.md, que diz que arma
+	// e asa nunca saem acima de L3 porque definem silhueta e identificacao de classe. A
+	// medicao deu o preco da invariante; a escolha de pagar ou nao e de quem opera o jogo,
+	// nao minha -- por isso a flag existe em vez de o corte ser incondicional.
+	if (CrowdLodSkipLinkObject(c))
+		return;
+
 	const bool timeThisLink = (s_charLinkDepth++ == 0);
 	struct LinkTimerExit
 	{
@@ -7243,8 +7333,25 @@ void RenderLinkObject(float x,float y,float z,CHARACTER *c,PART_t *f,int Type,in
 #endif //PBG_ADD_NEWCHAR_MONK_ITEM
    	b->Transform(BoneTransform,Temp,Temp,&OBB,Translate);
 
-	RenderPartObjectEffect(Object,Type,c->Light,o->Alpha,Level<<3,Option1,false,0,RenderType | ((c->MonsterIndex==67 || c->MonsterIndex==137) ? ( RENDER_EXTRA | RENDER_TEXTURE) : RENDER_TEXTURE));
-	
+	// O DESENHO da arma/asa, isolado do preparo. `us_char_link` ficou sendo o maior bloco
+	// indiviso do frame depois dos consertos de GPU skinning -- 8,8 ms de ~22 -- e ele
+	// junta duas coisas de naturezas diferentes: PlayAnimation + Animation + Transform
+	// (matriz de osso, potencialmente cacheavel entre personagens que usam a mesma arma na
+	// mesma pose) e a emissao de geometria.
+	//
+	// `us_char_link - us_char_link_draw` da o preparo. Se o preparo dominar, a hipotese do
+	// cache de pose de arma tem alvo; se o desenho dominar, ela nao paga e o caminho e
+	// cortar arma por tamanho na tela.
+	//
+	// Nao entra em us_char_draw de proposito: aquela coluna e restrita ao que esta dentro
+	// de RenderPartObject, para que `mesh - draw` continue significando setup de malha.
+	{
+		const long long linkDrawStartUs = FrameLoopNowMicroseconds();
+		RenderPartObjectEffect(Object,Type,c->Light,o->Alpha,Level<<3,Option1,false,0,RenderType | ((c->MonsterIndex==67 || c->MonsterIndex==137) ? ( RENDER_EXTRA | RENDER_TEXTURE) : RENDER_TEXTURE));
+		RecordCharLinkDrawUs(FrameLoopNowMicroseconds() - linkDrawStartUs);
+	}
+
+
 	float Luminosity;
 	vec3_t Light;
     Luminosity = (float)(rand()%30+70)*0.005f;
@@ -11558,15 +11665,25 @@ static bool CrowdLodIsExempt(CHARACTER* c, OBJECT* o, int index, bool mapForcesF
 
 void RenderCharactersClient()
 {
-	// Fase 0 do Crowd LOD: CLASSIFICA e CONTA, nao corta. Nenhuma decisao de render
-	// abaixo consulta o nivel -- o que sai daqui sao as colunas do CSV que dizem
-	// como o frame escala com o numero de personagens. Ver CROWD_LOD_PLAN.md.
+	// Classificacao de Crowd LOD. Com `-crowdlod=off` (o default) ela so alimenta as
+	// colunas do CSV; com `on` ou `compare`, RenderLinkObject passa a consultar
+	// g_crowdLevel e deixa de desenhar arma e asa dos rebaixados. Ver CROWD_LOD_PLAN.md.
 	const bool crowdMapForcesFull = CrowdLodMapForcesFull();
+	float crowdBudgetPixels[MAX_CHARACTERS_CLIENT];
+	int crowdBudgetCount = 0;
+	// A CONTAGEM sai depois do teto, nao aqui. Se CountCharacter fosse chamado durante a
+	// classificacao, o CSV registraria a distribuicao PRE-teto: com -crowdmaxfull=15 o
+	// corte aconteceria e as colunas chars_lod0..3 mostrariam todos em L0. Quem lesse a
+	// captura concluiria que a flag nao fez nada -- o instrumento mentindo sobre a
+	// otimizacao que ele existe para medir.
+	struct CrowdSlotFacts { unsigned char kind; bool visible, beyondFar, forced, live; };
+	CrowdSlotFacts crowdFacts[MAX_CHARACTERS_CLIENT];
 	for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
 	{
 		CHARACTER* c = &CharactersClient[i];
 		OBJECT* o = &c->Object;
 
+		g_crowdLevel[i] = (unsigned char)CrowdLod::LevelFull;
 		if (o->Live)
 		{
 			const float dx = o->Position[0] - CameraPosition[0];
@@ -11581,11 +11698,62 @@ void RenderCharactersClient()
 			const CrowdLod::Level level = forced ? CrowdLod::LevelFull
 				: CrowdLod::ClassifyByScreenPixels(pixels);
 			// beyondFar responde uma pergunta da Fase 1: o teste de visibilidade de
-			// personagem e 2D (TestFrustrum2D) e nao tem plano far, entao hoje estes
-			// sao desenhados. Se a coluna vier zerada, corte por distancia nao paga.
-			CrowdLod::CountCharacter(CrowdLod::KindFromLegacyKind(o->Kind),
-				o->Visible ? true : false, distance > CameraViewFar, forced, level);
+			// personagem e 2D (TestFrustrum2D) e nao tem plano far, entao quem passa dele
+			// e desenhado mesmo estando atras do plano de recorte.
+			//
+			// O fator 1.4 NAO e arbitrario: e o que BeginOpengl passa para a projecao da
+			// cena 3D (ZzzOpenglUtil.cpp:956, `CameraViewFar*1.4f`). A primeira versao
+			// desta coluna comparava com CameraViewFar puro e por isso contava como "alem
+			// do far" personagens que ainda apareciam na tela -- e, pior, sugeria que
+			// cortar em 1.0x seria de graca. Cortar ali faria personagem sumir a 1/1.4 do
+			// alcance real.
+			const float cullDistance = CameraViewFar * 1.4f;
+			crowdFacts[i].live = true;
+			crowdFacts[i].kind = (unsigned char)CrowdLod::KindFromLegacyKind(o->Kind);
+			crowdFacts[i].visible = o->Visible ? true : false;
+			crowdFacts[i].beyondFar = distance > cullDistance;
+			crowdFacts[i].forced = forced;
+
+			g_crowdLevel[i] = (unsigned char)level;
+			// Candidatos ao teto por contagem: visiveis e nao isentos. O teto e a alavanca
+			// que a medicao sustenta -- limiar por distancia nao dispara nesta camera (175
+			// de 175 ficaram em L0 na captura de 2026-08-10).
+			//
+			// Pixels em FLOAT. A primeira versao guardava (int)pixels com a justificativa de
+			// que "a ordenacao so precisa de ordem" -- plausivel e errada: o cast fabricava
+			// empate, e empate mantem o personagem no teto. Ver CrowdLodApplyBudget.
+			if (o->Visible && !forced)
+			{
+				g_crowdPixels[i] = pixels > 0.f ? pixels : 1.f;
+				crowdBudgetPixels[crowdBudgetCount++] = g_crowdPixels[i];
+			}
+			else
+				g_crowdPixels[i] = 0.f;
 		}
+		else
+		{
+			g_crowdPixels[i] = 0.f;
+			crowdFacts[i].live = false;
+		}
+	}
+
+	// Entre os dois lacos de proposito: o teto precisa de TODOS classificados para saber
+	// quais sao os maiores, e o laco de render abaixo ja consulta o nivel final.
+	CrowdLodApplyBudget(crowdBudgetPixels, crowdBudgetCount);
+
+	// Contagem com o nivel FINAL, depois do teto. Ver o comentario da declaracao acima.
+	for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+	{
+		if (!crowdFacts[i].live) continue;
+		CrowdLod::CountCharacter((CrowdLod::Kind)crowdFacts[i].kind,
+			crowdFacts[i].visible, crowdFacts[i].beyondFar, crowdFacts[i].forced,
+			(CrowdLod::Level)g_crowdLevel[i]);
+	}
+
+	for (int i = 0; i < MAX_CHARACTERS_CLIENT; ++i)
+	{
+		CHARACTER* c = &CharactersClient[i];
+		OBJECT* o = &c->Object;
 
 		if (c != Hero && battleCastle::IsBattleCastleStart() == true && g_isCharacterBuff(o, eBuff_Cloaking))
 		{

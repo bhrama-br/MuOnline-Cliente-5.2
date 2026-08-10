@@ -134,6 +134,40 @@ Para uma reconfiguração Web completa, remova somente o conteúdo gerado de `bu
 
 ### GPU skinning
 
+**Cobertura ampliada em 2026-08-10, e ainda não verificada com `compare`.** O diagnóstico
+`[GpuSkinReject]` (ver abaixo) mostrou que 824 sub-malhas por frame caíam na CPU numa
+multidão de 50 players, todas por material: `RENDER_CHROME4` — com que as cinco peças de
+armadura são desenhadas — não tinha efeito mapeado no caminho de GPU, e a condição de
+blend mesh reprovava sub-malhas equivalentes ao ramo normal. As duas foram consertadas
+(`CROWD_LOD_PLAN.md`, seções 0.10 e 0.11); a primeira rendeu **+15% de FPS**. Rode
+`-gpuskinning=compare` antes de confiar no visual: divergência aparece como cintilação.
+
+Ainda ficam na CPU, de propósito: `RENDER_CHROME3` (a UV depende de `LightVector`, que o
+shader não recebe), `RENDER_CHROME5` e `RENDER_CHROME7` (o caminho legado não faz bind de
+textura para elas — a malha herda a anterior, o que não é reproduzível num lote), malha com
+UV animada e malha com alpha < 0,99.
+
+Quando um material é reprovado, `-renderstatscsv` escreve no `MuError.log` uma linha por
+combinação (modelo, motivo) nova, com teto de 64, e um resumo com a média por frame:
+
+```
+[GpuSkinReject] modelo 4708: sem-textura+renderflags (renderflags nao suportadas 0x1000)
+[GpuSkinReject] media/frame em 600 frames: total 422  blendmesh 272  uv-animado 90 ...
+```
+
+É log e não coluna de CSV porque a pergunta é pontual: respondida, o trabalho é consertar
+a condição, não acompanhar a métrica.
+
+Antes de abrir o jogo, um verificador confere se as UV de chrome do shader batem com as da
+CPU — pega sinal trocado, fator errado e termo esquecido em um segundo:
+
+```powershell
+python diagnostic\check_chrome_uv.py
+```
+
+Ele **não** cobre estado de GL (blend, depth, textura ligada) nem precisão de float32 no
+hardware. Para isso não há substituto para `-gpuskinning=compare`.
+
 - Desenvolvimento: `-gpuskinning=dev` ou `compare` alterna CPU/GPU por frame.
 - QA: sem flag, GPU ativa para modelos elegíveis com fallback CPU.
 - Produção gradual: `-gpuskinning=production -gpuskinning-models=ID1,ID2`.
@@ -149,7 +183,7 @@ default é o que roda.
 
 | Flag | Padrão | O que liga |
 | --- | --- | --- |
-| `-statictransformcache=on` | off | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. |
+| `-statictransformcache=on` | off | Adia o laço por vértice de `BMD::Transform` até alguém ler os arrays de transformação, e cacheia a pose em `BMD::Animation`. **Medido em 2026-08-10 sob multidão: −15% de frame com 100 monstros, −5% com 50 players.** A corretude depende de todo leitor dos arrays globais materializar antes de ler; isso foi auditado (57 leituras, 4 arquivos, todas guardadas) e virou teste — `python diagnostic\check_transform_cache_readers.py`. Falta só `compare` para o default virar `on`. |
 | `-batching=on` | **on** | Cache espelhado de uniformes, submissão de vértices em bloco, fusão de comandos adjacentes na fila de opacos e redução dos pontos de flush. Em mundo 2 cena 5: draws de 4.366 → ~1.835 por frame, `flush_matrix` de 449 → 0, ~20.000 chamadas de uniforme evitadas por frame. `-batching=off` reverte. |
 | `-instancing=on` | **on** | Agrupa instâncias da mesma malha com o mesmo estado num `glDrawElementsInstanced`, com a paleta de ossos em textura. Ligada por decisão de projeto, **não por ganho medido**: em `RenderPerformance_v16` rendeu 2–3 draws instanciados por frame cobrindo 4–6 objetos (`instance_batch_max = 2`), e em mundo 94 (sem personagens, ~55 draws) a captura ligada ficou 10% mais lenta. `-instancing=off` reverte. |
 | `-cpumatrices=on` | **on** | Lê projeção e modelview do espelho em CPU em vez de `glGetFloatv`. Elimina os 6 pontos de sincronização por frame: `cpu_us` de 7.596 para 4.450 µs em Lorencia, −41%. Divergência contra o driver medida em 1,0e-6. |
@@ -165,6 +199,38 @@ Dungeon, Devias, Noria) e na seleção de personagem, todas com divergência de
 Vale saber: o espelho de matrizes alimenta a pilha em CPU **sempre**, com a flag
 ligada ou não — ela controla apenas de onde as matrizes são *lidas*. Desligar não
 remove a interceptação, só volta a ler do driver com `glGetFloatv`.
+
+### Isolar uma regressão visual
+
+Quatro mudanças de 2026-08-10 alteram o que é desenhado, e **cada uma tem sua própria
+chave de desligar**. Se algo parecer errado na tela, não é preciso adivinhar: desligue uma
+por vez, na ordem abaixo, e a primeira que resolver aponta a culpada.
+
+| # | mudança | desliga com | o que ela afeta |
+| --- | --- | --- | --- |
+| 1 | `RENDER_CHROME4`/`CHROME6` no caminho de GPU | `-gpuskinning=off` | UV de chrome da armadura de player |
+| 2 | condição de blend mesh removida do portão | `-gpuskinning=off` | sub-malhas não-blend de modelo com blend mesh |
+| 3 | coletor de instâncias só descarrega quando a ordem importa | `-instancing=off` | ordem de emissão entre opacos |
+| 4 | corte de arma/asa por teto de contagem | `-crowdlod=off` (**já é o default**) | arma e asa fora do teto |
+
+As duas primeiras compartilham a chave: ambas só existem dentro do caminho de GPU skinning.
+Para separá-las é preciso reverter no código — mas a matemática das UV do item 1 já está
+verificada por `python diagnostic\check_chrome_uv.py`, então o suspeito preferencial é o 2.
+
+**Cuidado com o significado de cintilação**, que muda por flag:
+
+| modo | cintilação significa |
+| --- | --- |
+| `-gpuskinning=compare`, `-instancing=compare`, `-cpumatrices=compare`, `-statictransformcache=compare` | **bug** — os dois caminhos deveriam ser idênticos |
+| `-crowdlod=preview` | **o efeito** — os dois caminhos são intencionalmente diferentes |
+
+Ordem sugerida de verificação, do mais barato ao mais caro:
+
+```powershell
+.\Main.exe -crowd=50 -gpuskinning=compare            # itens 1 e 2
+.\Main.exe -crowd=50 -instancing=compare             # item 3
+.\Main.exe -crowd=50 -statictransformcache=compare   # libera o default do cache
+```
 
 ### Diagnóstico de fill rate
 
@@ -228,15 +294,35 @@ mergulho transitório e a média de 120 frames o dilui.
 Objetivo: fazer 100–200 personagens visíveis caberem no orçamento de frame nos três
 alvos. Plano completo e invariantes em `CROWD_LOD_PLAN.md`.
 
-**A Fase 0 está no código e ela não corta nada.** `-crowdlod` existe, o default é
-`off`, e nenhum caminho de render consulta o nível de LOD ainda. O que a fase entrega
-são os contadores: sem eles não se sabe nem se o custo por personagem está na pose, no
-equipamento ou na sombra, e o projeto já retratou uma conclusão inteira por medir a
-coisa errada (commit `e3cb8b7`).
+**O que o LOD corta, e por que só isso:** com `-crowdlod=on` e um teto
+(`-crowdmaxfull=N`), os personagens fora do teto param de ter **arma e asa** desenhadas.
+É o único corte com prêmio grande que a medição encontrou — `us_char_link_draw` é 30% do
+frame, e 81% dele é emissão de geometria, então nenhum cache resolve. Pose (0,5 ms) e
+sombra (0,5 ms) de um frame de 18,7 não pagam corte.
+
+**Sem `-crowdmaxfull` o LOD não corta nada**, e isso é de propósito: limiar por distância
+não dispara nesta câmera — na captura de 2026-08-10, **175 de 175** personagens ficaram em
+L0, porque MU mantém tudo grande na tela. A alavanca é contagem, não metros.
+
+**Isto colide com uma invariante do plano** (arma e asa definem silhueta e identificação de
+classe, e não deveriam sair). A medição deu o preço da invariante — **+38% de FPS**, 53,6 →
+73,7 com 59 personagens — e pagar ou não é decisão de quem opera o jogo. É por isso que o
+default é `off`.
+
+> **Cuidado com o significado de `preview`/`compare` nesta flag.** Nas demais
+> (`-gpuskinning`, `-cpumatrices`, `-statictransformcache`), `compare` alterna por frame
+> **dois caminhos que deveriam ficar idênticos**, e cintilação significa **bug**. Aqui os
+> dois caminhos são intencionalmente diferentes: cintilação é **o efeito do corte**, não
+> defeito. Foi por isso que o modo ganhou o nome `preview`.
+>
+> Para julgar se o corte é aceitável, use **`-crowdlod=on`** e olhe o estado final. No modo
+> alternado o cérebro reage ao movimento, não à ausência, e a avaliação sai errada. E uma
+> captura em `preview` não mede nem o corte nem a ausência dele — mede a média dos dois.
 
 | flag | efeito |
 | --- | --- |
-| `-crowdlod=off\|on\|compare` | modo do LOD. **Default `off`.** Registrado na coluna `crowd_lod`. |
+| `-crowdlod=off\|on\|preview` | modo do LOD. **Default `off`.** Registrado na coluna `crowd_lod`. `compare` é aceito como sinônimo de `preview` — leia o aviso abaixo antes de usar. |
+| `-crowdmaxfull=N` | teto de personagens em qualidade plena. **Ausente = sem teto**, e sem teto o LOD **não corta nada** — ver abaixo. Registrado em `crowd_max_full`. |
 | `-crowd=N` | N players sintéticos ao redor do herói. Registrado em `crowd_spawn`. |
 | `-crowdmonsters=N` | N monstros sintéticos. Registrado em `crowd_spawn_monsters`. |
 | `-crowdnpcs=N` | N NPCs sintéticos. Registrado em `crowd_spawn_npcs`. |
@@ -386,11 +472,12 @@ fez, para que o tempo já medido possa ser dividido por algo.
 | --- | --- |
 | `chars_live_avg`, `chars_visible_avg`, `chars_visible_max` | slots vivos, dentro do frustum, e o pico de visíveis (a multidão de pior caso é o que define o orçamento; a média a esconde) |
 | `chars_culled_frustum_avg` | vivos fora do frustum |
-| `chars_beyond_far_avg` | vivos além de `CameraViewFar` que **ainda são desenhados** — o teste de visibilidade de personagem é 2D e não tem plano far |
+| `chars_beyond_far_avg` | vivos além do plano de recorte (`CameraViewFar * 1.4`, o valor que `BeginOpengl` passa à projeção) que **ainda são desenhados** — o teste de visibilidade de personagem é 2D e não tem plano far |
 | `chars_lod0_avg` … `chars_lod3_avg` | distribuição de níveis. Tudo em L0 significa que nenhum corte teria efeito naquela captura |
 | `chars_lod_forced_avg` | isentos de LOD: herói, alvo selecionado, party e mapas PvP |
 | `chars_players_avg`, `chars_monsters_avg`, `chars_npcs_avg`, `chars_other_avg` | composição da multidão. `other` é trap/pet/tmp/edit, e existe para a soma fechar com `chars_live` |
 | `char_poses_avg`, `char_part_meshes_avg`, `char_shadows_avg` | poses calculadas, malhas de personagem e sombras emitidas por frame |
+| `char_batch_accum_avg`, `char_batch_breaks_avg`, `char_batch_run_max` | o coletor de instâncias: malhas que entraram num lote, malhas que forçaram descarga, e o maior lote do frame. **`accum / breaks` é o comprimento médio de sequência**, e é ele que decide se reordenar a emissão formaria lote ou não. Exige `-instancing=on` (o default) — com `off` nada acumula por construção e a medida é inválida. O leitor imprime a conclusão. |
 
 Os contadores de `chars_*` cobrem o pool inteiro — **players, monstros e NPCs**. Os
 três de trabalho não são simétricos, e ler como se fossem dá conclusão errada:

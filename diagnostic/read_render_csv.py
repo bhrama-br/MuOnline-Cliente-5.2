@@ -62,6 +62,7 @@ NESTING = {
     "us_char_link": "us_char_parts",
     "us_char_transform": "us_char_parts",
     "us_char_draw": "us_char_mesh",
+    "us_char_link_draw": "us_char_link",
 }
 
 # Toda coluna que MUDA o resultado tem que estar aqui. crowd_spawn entra porque uma
@@ -290,6 +291,39 @@ def print_group(config, rows):
         if visible > 0:
             print("  por visivel: %.1f malhas   %.1f us de us_characters"
                   % (meshes / visible, characters_us / visible))
+
+        # Coletor de instancias: a pergunta e se REORDENAR a emissao renderia lote maior,
+        # ou se as malhas reordenaveis vem uma-a-uma e nao ha lote possivel. A regra de
+        # decisao fica aqui, e nao na cabeca de quem le a planilha.
+        if any(r.get("char_batch_breaks_avg") for r in rows):
+            accum = mean([read_num(r, "char_batch_accum_avg") for r in rows])
+            breaks = mean([read_num(r, "char_batch_breaks_avg") for r in rows])
+            run_max = mean([read_num(r, "char_batch_run_max") for r in rows])
+            run = accum / breaks if breaks > 0 else 0.0
+            print("  coletor de instancias: %.1f acumuladas, %.1f quebras"
+                  " -> sequencia media %.2f, pico %.0f" % (accum, breaks, run, run_max))
+            instancing = rows[0].get("instancing", "?")
+            if instancing != "on":
+                print("    (instancing=%s: nada acumula por construcao, medida invalida)"
+                      % instancing)
+            elif accum < 1.0:
+                print("    quase nada e reordenavel -> o problema e MATERIAL, nao ordem de"
+                      " emissao")
+            elif run < 3.0:
+                print("    sequencia curta -> a ordem de emissao e o problema: malha")
+                print("    reordenavel vem intercalada com compositora e o balde nunca cresce")
+            else:
+                print("    sequencia longa -> o balde ja cresce sozinho; o gargalo esta em"
+                      " outro lugar")
+            # A politica de reordenacao NAO precisa ser inventada: RenderQueue::Execute
+            # (Platform/RenderPipeline.cpp:103) ja ordena os opacos por shader/blend/depth/
+            # textura com stable_sort e funde os adjacentes com PodeFundir, preservando a
+            # ordem de emissao dos TRANSPARENTES via `sequence` -- que e exatamente a
+            # ressalva de blend. O caminho de malha estatica (DrawStaticMesh) nao tem essa
+            # politica; dar a mesma a ele e o conserto, e nao um mecanismo novo.
+            if breaks > 0 and run < 3.0:
+                print("    ver RenderPipeline.cpp:103 -- a fila de opacos ja ordena e funde"
+                      " com a politica certa")
     print()
 
     blocks = [(c, mean([read_num(r, c) for r in rows])) for c in CPU_PHASES + OUTSIDE_PHASES]
@@ -333,6 +367,16 @@ def print_group(config, rows):
                     print("    %-18s %8.0f us  %5.1f%% de %s%s"
                           % (child, child_value,
                              100 * child_value / value if value else 0, name, extra))
+                    # Dentro de RenderLinkObject: desenho da arma contra o preparo
+                    # (PlayAnimation + Animation + Transform da matriz de osso).
+                    if child == "us_char_link" and any(r.get("us_char_link_draw") for r in rows):
+                        ld = mean([read_num(r, "us_char_link_draw") for r in rows])
+                        print("      %-16s %8.0f us  %5.1f%% de us_char_link"
+                              % ("us_char_link_draw", ld,
+                                 100 * ld / child_value if child_value else 0))
+                        print("      %-16s %8.0f us  %5.1f%% de us_char_link"
+                              % ("preparo (ossos)", child_value - ld,
+                                 100 * (child_value - ld) / child_value if child_value else 0))
                     # Dentro de RenderPartObject: desenho contra o setup em volta.
                     if child == "us_char_mesh" and any(r.get("us_char_draw") for r in rows):
                         draw = mean([read_num(r, "us_char_draw") for r in rows])
