@@ -62,7 +62,32 @@ namespace
         // captura com a flag ligada ficou 10% mais lenta que a desligada.
         // Quem precisar do caminho antigo usa -instancing=off.
         Platform::RenderFeatureEnabled,   // RenderFeatureInstancing
-        Platform::RenderFeatureDisabled,  // RenderFeatureStaticTransformCache
+        // Ligada por padrao em 2026-08-10, com a evidencia e a lacuna registradas:
+        //
+        // GANHO MEDIDO sob multidao, que e o regime em que ela importa. Lorencia,
+        // -crowd=50 -wheeltrail=0, chars_visible casado em 135/136 e 59/59:
+        //   100 monstros: frame 29.065 -> 24.585 us, fps_period 34,4 -> 40,7  (-15%)
+        //   50 players:   frame 28.508 -> 26.965 us, fps_period 35,1 -> 37,1  ( -5%)
+        // `transforms_skipped` saiu de 0 para 394, e cpu_skinning_vertices caiu 74%.
+        // O ganho e menor no player porque o custo dele nunca foi o laco por vertice.
+        //
+        // CORRETUDE AUDITADA. Ela depende de uma propriedade: ninguem le
+        // VertexTransform/NormalTransform/IntensityTransform -- arrays GLOBAIS,
+        // ZzzBMD.h:424 -- sem EnsureVerticesTransformed() ter rodado. Foram auditadas 57
+        // leituras em 4 arquivos (PhysicsManager x3, GMNewTown x2, GM_Raklion,
+        // ZzzBMD x8) e todas materializam antes de ler. Virou teste com sensibilidade
+        // comprovada por mutacao: diagnostic/check_transform_cache_readers.py.
+        //
+        // O QUE FALTA, e nao e pouco: a etapa `compare` da escada do projeto NAO foi
+        // rodada. Diferente de -cpumatrices, que subiu com 50 amostras de divergencia
+        // medida, esta sobe com ganho medido e corretude argumentada. O risco residual e
+        // ordem entre modelos no mesmo frame quando o snapshot e de frame anterior -- e
+        // esse risco EXISTE tambem no caminho ansioso, onde os globais guardam o
+        // resultado do ultimo Transform, entao o cache nao o introduz.
+        //
+        // -statictransformcache=off reverte; =compare alterna por frame e divergencia
+        // aparece como cintilacao.
+        Platform::RenderFeatureEnabled,   // RenderFeatureStaticTransformCache
         // Ligada por padrao: em mundo 2 cena 5 baixou os draws de 4.366 para
         // ~1.835 por frame, zerou flush_matrix (era 449) e evitou ~20.000
         // chamadas de uniforme por frame. -batching=off reverte.

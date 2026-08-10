@@ -204,6 +204,15 @@ namespace
 #define glGetQueryObjectui64v g_ModernGl.GetQueryObjectui64v
 #endif
 
+    // Tamanho declarado do bloco BmdBones: vec4 uBoneRows[600]. Precisa ser exato.
+    //
+    // O GLES3/WebGL2 exige que TODO bloco de uniformes ATIVO tenha, no seu ponto de
+    // ligacao, um buffer de pelo menos este tamanho -- no momento do draw, mesmo que
+    // o shader nao va ler o bloco naquele desenho. Quem nao cumpre leva
+    // GL_INVALID_OPERATION e o draw inteiro e descartado. O GL de desktop nao cobra
+    // isso, e foi por isso que o PC nunca mostrou o problema.
+    const size_t kBoneBlockBytes = 600 * 4 * sizeof(float);
+
     struct LegacyVertex
     {
         float position[3];
@@ -1049,6 +1058,16 @@ namespace
             glEnableVertexAttribArray(6); glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, sizeof(Platform::StaticMeshVertex), (void*)offsetof(Platform::StaticMeshVertex, waveSeed));
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
+            // OBRIGATORIO. Esta funcao acabou de trocar o VAO e o ARRAY_BUFFER, e era
+            // o UNICO ponto do adaptador que fazia isso sem avisar o espelho de
+            // estado -- os outros binds (DrawStaticMesh, instanciado) invalidam a
+            // flag depois de usar. Sem esta linha, um upload disparado no meio do
+            // quadro deixava m_vaoActive dizendo "true" com o VAO 0 ligado: o
+            // caminho imediato entao pulava o rebind, chamava glBufferSubData sobre
+            // ARRAY_BUFFER=0 e desenhava sem atributo nem indice ligado. O resultado
+            // era GL_INVALID_OPERATION preso e TODA a UI, sprites e terreno
+            // invisiveis -- tela preta com o laco vivo e 59 draws por quadro.
+            m_vaoActive = false;
 
             size_t slot = m_staticMeshFreeList.empty() ? m_staticMeshes.size() : m_staticMeshFreeList.back();
             if (m_staticMeshFreeList.empty())
@@ -1107,7 +1126,12 @@ namespace
             if (skinning)
             {
                 std::vector<float>& rows = m_boneRows;
-                const size_t rowCount = boneCount * 12;
+                // Truncado ao bloco declarado (600 vec4 = 200 ossos). Agora que o
+                // upload usa o tamanho do bloco, uma pose maior que ele escreveria
+                // fora do buffer em vez de apenas redimensiona-lo.
+                size_t rowCount = boneCount * 12;
+                if (rowCount * sizeof(float) > kBoneBlockBytes)
+                    rowCount = kBoneBlockBytes / sizeof(float);
                 const size_t byteCount = rowCount * sizeof(float);
                 // Diversas meshes do mesmo BMD compartilham a mesma pose. So
                 // reenviamos a UBO se as matrizes realmente mudaram; comparar
@@ -1124,7 +1148,14 @@ namespace
                     glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
                     // Orphaning explicito evita esperar uma leitura da paleta
                     // pelo GPU antes de gravar a pose seguinte.
-                    glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(byteCount), NULL, GL_STREAM_DRAW);
+                    //
+                    // O tamanho e o do BLOCO, nao o da pose. Com byteCount o buffer
+                    // era reduzido ao tamanho da paleta desta malha (boneCount*48,
+                    // tipicamente uma fracao dos 9600 bytes do bloco) e passava a
+                    // violar o minimo exigido pelo GLES3/WebGL2 -- derrubando com
+                    // GL_INVALID_OPERATION nao so esta malha, mas todo draw seguinte
+                    // do mesmo programa enquanto este buffer continuasse no binding.
+                    glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(kBoneBlockBytes), NULL, GL_STREAM_DRAW);
                     glBufferSubData(GL_UNIFORM_BUFFER, 0, static_cast<GLsizeiptr>(byteCount), &rows[0]);
                     ++m_frameStats.bufferDataCalls;
                     ++m_frameStats.bufferSubDataCalls;
@@ -1574,6 +1605,18 @@ namespace
             glGenBuffers(3, m_boneBuffers);
             m_boneBuffer = m_boneBuffers[0];
             m_boneBufferIndex = 1;
+            // Os tres buffers da paleta nascem com o bloco INTEIRO alocado, e um
+            // deles fica ligado ao binding 0 desde ja. Antes eles eram apenas
+            // gerados, e so ganhavam armazenamento quando a primeira malha com ossos
+            // era desenhada -- ate la o binding 0 apontava para nada, e todo draw
+            // deste programa (UI, sprites, terreno) morria com GL_INVALID_OPERATION.
+            for (int i = 0; i < 3; ++i)
+            {
+                glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffers[i]);
+                glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(kBoneBlockBytes), NULL, GL_STREAM_DRAW);
+            }
+            glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_boneBuffer);
             glBindVertexArray(m_vertexArray);
             glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_quadIndexBuffer);

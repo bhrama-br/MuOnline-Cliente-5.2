@@ -151,6 +151,10 @@ target_link_options(mu_legacy_web PRIVATE
     "-sUSE_WEBGL2=1"
     "-sMIN_WEBGL_VERSION=2"
     "-sMAX_WEBGL_VERSION=2"
+    # Nao usar -sGL_ASSERTIONS=1 aqui: em 2026-08-10 a camada de validacao atrasou
+    # tanto o carregamento que o cliente saiu antes do primeiro quadro, num
+    # OpenTexture Failed de Data\Skill\ston1.jpg. O erro de draw foi instrumentado
+    # dentro de GlslLegacyRenderAdapter em vez disso.
     # Memoria fixa em vez de crescivel: com ALLOW_MEMORY_GROWTH o Emscripten cria
     # um ArrayBuffer redimensionavel, e o Chrome recente recusa
     # TextDecoder.decode() sobre esse tipo de buffer — a pagina quebra antes de
