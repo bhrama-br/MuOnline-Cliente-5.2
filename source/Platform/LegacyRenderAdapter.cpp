@@ -61,6 +61,14 @@ namespace
         // cena de ~1800 draws. Em mundo 94 (sem personagens, ~55 draws) a
         // captura com a flag ligada ficou 10% mais lenta que a desligada.
         // Quem precisar do caminho antigo usa -instancing=off.
+        //
+        // FOI A CAUSA do item invisivel no inventario (2026-08-11), e o defeito nao
+        // estava no agrupamento: estava na barreira que faltava. O coletor reaplica
+        // textura/blend/profundidade no flush, mas nao a matriz, e o passe de UI
+        // terminava sem descarga -- item de inventario adiado para o passe de mundo
+        // do frame seguinte. Consertado em GlslLegacyRenderAdapter.cpp, em
+        // SetMatrices: trocar de matriz agora descarrega o coletor, como ja
+        // descarregava o lote de vertices. A flag segue ligada.
         Platform::RenderFeatureEnabled,   // RenderFeatureInstancing
         // Ligada por padrao em 2026-08-10, com a evidencia e a lacuna registradas:
         //
@@ -87,6 +95,10 @@ namespace
         //
         // -statictransformcache=off reverte; =compare alterna por frame e divergencia
         // aparece como cintilacao.
+        // TESTADO E DESCARTADO como causa (2026-08-11): com ela DESLIGADA, arma e set
+        // pegos do chao continuaram invisiveis no inventario ate outro item ser pego.
+        // O sintoma tambem e retroativo e permanente, o que nao combina com um cache
+        // de pose por quadro. Segue ligada pelo ganho ja medido.
         Platform::RenderFeatureEnabled,   // RenderFeatureStaticTransformCache
         // Ligada por padrao: em mundo 2 cena 5 baixou os draws de 4.366 para
         // ~1.835 por frame, zerou flush_matrix (era 449) e evitou ~20.000

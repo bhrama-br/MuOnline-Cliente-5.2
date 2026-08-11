@@ -58,9 +58,9 @@ namespace
         {
             // New UI controls read mouse buttons through IsPress(VK_*BUTTON),
             // which ultimately uses this legacy asynchronous-key table.
-            Platform::DefinirTeclaLegada(0x01, m_left.load());
-            Platform::DefinirTeclaLegada(0x02, m_right.load());
-            Platform::DefinirTeclaLegada(0x04, m_middle.load());
+            Platform::SetLegacyKeyState(0x01, m_left.load());
+            Platform::SetLegacyKeyState(0x02, m_right.load());
+            Platform::SetLegacyKeyState(0x04, m_middle.load());
         }
         std::atomic<long> m_x, m_y;
         std::atomic<bool> m_left, m_right, m_middle;
@@ -98,10 +98,10 @@ namespace
     // Decodifica UTF-8. O `key` de um caractere imprimivel tem exatamente um
     // codepoint; qualquer coisa maior e um nome de tecla ("Enter", "ArrowLeft").
     // Devolve 0 quando nao e um unico codepoint.
-    unsigned int CodepointUnico(const char* texto)
+    unsigned int CodepointUnico(const char* text)
     {
-        if (texto == NULL || texto[0] == '\0') return 0;
-        const unsigned char* bytes = (const unsigned char*)texto;
+        if (text == NULL || text[0] == '\0') return 0;
+        const unsigned char* bytes = (const unsigned char*)text;
         unsigned int codigo = 0;
         int comprimento = 0;
         if (bytes[0] < 0x80)             { codigo = bytes[0];        comprimento = 1; }
@@ -123,7 +123,7 @@ namespace
     // (backspace, tab, enter), 16-18 (shift, ctrl, alt), 27 (esc), 32 (espaco), 33-40
     // (pgup/pgdn/end/home/setas), 45/46 (insert, delete), 48-57 (digitos), 65-90
     // (letras), 112-123 (F1-F12). Fora dessa faixa nao importa: o cliente nao consulta.
-    unsigned int CodigoVirtual(const EmscriptenKeyboardEvent* evento)
+    unsigned int VirtualKeyCodeOf(const EmscriptenKeyboardEvent* evento)
     {
         if (evento->keyCode > 0 && evento->keyCode < 256) return evento->keyCode;
         if (evento->which > 0 && evento->which < 256) return (unsigned int)evento->which;
@@ -136,16 +136,16 @@ namespace
 
     EM_BOOL OnKeyUp(int, const EmscriptenKeyboardEvent* event, void*)
     {
-        const unsigned int virtualDom = CodigoVirtual(event);
-        if (virtualDom != 0) Platform::DefinirTeclaLegada((int)virtualDom, false);
-        return Platform::HaFocoDeTexto() ? EM_TRUE : EM_FALSE;
+        const unsigned int virtualDom = VirtualKeyCodeOf(event);
+        if (virtualDom != 0) Platform::SetLegacyKeyState((int)virtualDom, false);
+        return Platform::HasTextFieldFocus() ? EM_TRUE : EM_FALSE;
     }
 
     // Ao perder o foco da janela nao chegam mais eventos de soltar: sem limpar, uma
     // tecla ficaria "presa" para sempre (o cliente andaria sozinho, por exemplo).
     EM_BOOL OnBlur(int, const EmscriptenFocusEvent*, void*)
     {
-        Platform::LimparTecladoLegado();
+        Platform::ClearLegacyKeyboard();
         return EM_FALSE;
     }
 
@@ -154,8 +154,8 @@ namespace
         // A tabela de teclas do JOGO e alimentada SEMPRE, mesmo com campo de texto em
         // foco -- e o que o Windows faz, porque GetAsyncKeyState e global. Quem separa
         // os dois mundos e o cliente: CInput::IsKeyDown devolve false em modo de edicao.
-        const unsigned int virtualDom = CodigoVirtual(event);
-        const bool textHasFocus = Platform::HaFocoDeTexto();
+        const unsigned int virtualDom = VirtualKeyCodeOf(event);
+        const bool textHasFocus = Platform::HasTextFieldFocus();
 
         // Enter is a one-shot chat action.  Do not also place it in the legacy
         // asynchronous table: that second route can reopen or close the chat on
@@ -169,24 +169,24 @@ namespace
         }
         else if (virtualDom != 0)
         {
-            Platform::DefinirTeclaLegada((int)virtualDom, true);
+            Platform::SetLegacyKeyState((int)virtualDom, true);
         }
 
         // Sem campo de texto em foco a tecla nao e do EDIT: deixar o navegador em paz
         // preserva F5, F12 e os atalhos do usuario.
         if (!textHasFocus) return EM_FALSE;
 
-        const char* nome = event->key;
+        const char* name = event->key;
         // Ctrl+tecla nao vira caractere. O cliente trata Ctrl+C/V/X pelo proprio
         // filtro, mas colar de verdade depende da area de transferencia do sistema,
         // que ainda nao existe fora do Windows (OpenClipboard e stub).
         if (event->ctrlKey || event->altKey || event->metaKey) return EM_FALSE;
 
         unsigned int virtual_ = 0;
-        if      (strcmp(nome, "Backspace")  == 0) virtual_ = kVkBack;
-        else if (strcmp(nome, "Tab")        == 0) virtual_ = kVkTab;
-        else if (strcmp(nome, "Enter")      == 0) virtual_ = kVkReturn;
-        else if (strcmp(nome, "Escape")     == 0) virtual_ = kVkEscape;
+        if      (strcmp(name, "Backspace")  == 0) virtual_ = kVkBack;
+        else if (strcmp(name, "Tab")        == 0) virtual_ = kVkTab;
+        else if (strcmp(name, "Enter")      == 0) virtual_ = kVkReturn;
+        else if (strcmp(name, "Escape")     == 0) virtual_ = kVkEscape;
 
         // Backspace, Tab, Enter e Escape chegam ao EDIT como WM_CHAR, e nao WM_KEYDOWN:
         // e assim que o Windows entrega (TranslateMessage converte), e EditWndProc
@@ -194,27 +194,27 @@ namespace
         // trocar de campo (Tab) e permitir apagar num campo de so numeros.
         if (virtual_ != 0)
         {
-            Platform::EnviarCaractereDeTexto(virtual_);
+            Platform::SendTextCharacter(virtual_);
             return EM_TRUE;
         }
 
-        if      (strcmp(nome, "Delete")     == 0) virtual_ = kVkDelete;
-        else if (strcmp(nome, "Home")       == 0) virtual_ = kVkHome;
-        else if (strcmp(nome, "End")        == 0) virtual_ = kVkEnd;
-        else if (strcmp(nome, "ArrowLeft")  == 0) virtual_ = kVkLeft;
-        else if (strcmp(nome, "ArrowRight") == 0) virtual_ = kVkRight;
-        else if (strcmp(nome, "ArrowUp")    == 0) virtual_ = kVkUp;
-        else if (strcmp(nome, "ArrowDown")  == 0) virtual_ = kVkDown;
+        if      (strcmp(name, "Delete")     == 0) virtual_ = kVkDelete;
+        else if (strcmp(name, "Home")       == 0) virtual_ = kVkHome;
+        else if (strcmp(name, "End")        == 0) virtual_ = kVkEnd;
+        else if (strcmp(name, "ArrowLeft")  == 0) virtual_ = kVkLeft;
+        else if (strcmp(name, "ArrowRight") == 0) virtual_ = kVkRight;
+        else if (strcmp(name, "ArrowUp")    == 0) virtual_ = kVkUp;
+        else if (strcmp(name, "ArrowDown")  == 0) virtual_ = kVkDown;
         if (virtual_ != 0)
         {
-            Platform::EnviarTeclaDeTexto(virtual_);
+            Platform::SendTextKey(virtual_);
             return EM_TRUE;
         }
 
-        const unsigned int codigo = CodepointUnico(nome);
+        const unsigned int codigo = CodepointUnico(name);
         if (codigo >= 32)
         {
-            Platform::EnviarCaractereDeTexto(codigo);
+            Platform::SendTextCharacter(codigo);
             return EM_TRUE;
         }
         // Teclas de funcao e modificadoras ("F5", "Shift"): nao sao texto.

@@ -22,14 +22,14 @@ namespace Platform
     void RenderLegacyTitleScene();
 
     // WebLazyAssets.cpp: busca de assets sob demanda no lugar de --preload-file.
-    void InstalarBuscaSobDemanda();
-    void RelatarBuscaSobDemanda(void (*log)(const char*));
+    void InstallOnDemandAssetFetch();
+    void ReportOnDemandAssetFetch(void (*log)(const char*));
 
     // Declaradas em Platform/LegacySceneBringup.h
-    bool EntrarNaCenaDeLogin();
+    bool EnterLoginScene();
 
     // Platform/LegacyGlobalAllocations.cpp
-    void AlocarGlobaisDoCliente();
+    void AllocateClientGlobals();
 }
 
 // Audio do cliente, implementado por Platform/LegacyAudioBridge.cpp.
@@ -321,11 +321,11 @@ int main()
 
     // Antes de qualquer carregamento: a partir daqui todo fopen que falhar tenta
     // buscar o arquivo no servidor. Data/Interface deixou de ser empacotada.
-    Platform::InstalarBuscaSobDemanda();
+    Platform::InstallOnDemandAssetFetch();
 
     // Vetores globais do cliente. Precisa vir antes de qualquer carregamento:
     // OpenGateScript e companhia escrevem direto nesses ponteiros.
-    Platform::AlocarGlobaisDoCliente();
+    Platform::AllocateClientGlobals();
 
     // Carrega o terreno real pelo carregador do proprio jogo.
     if (OpenTerrainHeight((char*)"World10/TerrainHeight."))
@@ -356,13 +356,39 @@ int main()
     // Monta a tela de titulo do MU com o codigo do proprio jogo: as texturas de
     // BITMAP_TITLE pelo LoadBitmap do cliente e a UI por CUIMng::CreateTitleSceneUI.
     {
-        int larguraCanvas = 0;
-        int alturaCanvas = 0;
-        emscripten_get_canvas_element_size("#canvas", &larguraCanvas, &alturaCanvas);
-        if (larguraCanvas <= 0) larguraCanvas = 1280;
-        if (alturaCanvas  <= 0) alturaCanvas  = 720;
-        Platform::CreateLegacyTitleScene(larguraCanvas, alturaCanvas);
-        Platform::RelatarBuscaSobDemanda(&ForwardRenderLog);
+        // O TAMANHO REAL TEM DE VALER ANTES DE MONTAR A UI.
+        //
+        // emscripten_get_canvas_element_size le o BACKBUFFER, que ainda esta no default
+        // 300x150 aqui: quem o dimensiona e RenderLegacyFrame, e o primeiro quadro so
+        // roda depois deste bloco inteiro. Resultado: CreateTitleScene, LoadBasicData,
+        // CarregarInterfacePrincipal e EntrarNaCenaDeLogin rodavam todos a 300x150, e as
+        // janelas do jogo assam posicao e escala na criacao -- por isso a UI aparecia
+        // pequena. A remontagem posterior (AplicarResolucao) so refaz a UI do TITULO,
+        // nao as janelas da cena principal.
+        //
+        // O tamanho CSS ja e o final no momento em que main() roda, entao ele e a
+        // fonte correta; o backbuffer e ajustado aqui para casar com ele.
+        double cssWidth = 0.0;
+        double cssHeight = 0.0;
+        emscripten_get_element_css_size("#canvas", &cssWidth, &cssHeight);
+        int canvasWidth = (int)(cssWidth > 1.0 ? cssWidth : 0.0);
+        int canvasHeight = (int)(cssHeight > 1.0 ? cssHeight : 0.0);
+        if (canvasWidth <= 0 || canvasHeight <= 0)
+        {
+            // Sem tamanho CSS utilizavel, cai no backbuffer e depois num padrao.
+            emscripten_get_canvas_element_size("#canvas", &canvasWidth, &canvasHeight);
+            if (canvasWidth <= 1) canvasWidth = 1280;
+            if (canvasHeight  <= 1) canvasHeight  = 720;
+        }
+        emscripten_set_canvas_element_size("#canvas", canvasWidth, canvasHeight);
+        {
+            char line[96];
+            snprintf(line, sizeof(line), "resolucao inicial %dx%d (antes de montar a UI)",
+                     canvasWidth, canvasHeight);
+            ForwardRenderLog(line);
+        }
+        Platform::CreateLegacyTitleScene(canvasWidth, canvasHeight);
+        Platform::ReportOnDemandAssetFetch(&ForwardRenderLog);
 
         // Segunda metade da WebzenScene. Bloqueia a aba enquanto carrega: sao
         // centenas de buscas sincronas. O relatorio depois mostra o custo real,
@@ -372,14 +398,14 @@ int main()
         char tempo[120];
         snprintf(tempo, sizeof(tempo), "OpenBasicData levou %.1f s", (emscripten_get_now() - start) / 1000.0);
         ForwardRenderLog(tempo);
-        Platform::RelatarBuscaSobDemanda(&ForwardRenderLog);
+        Platform::ReportOnDemandAssetFetch(&ForwardRenderLog);
 
         // Ultima etapa da WebzenScene: as janelas do jogo.
-        Platform::CarregarInterfacePrincipal();
-        Platform::RelatarBuscaSobDemanda(&ForwardRenderLog);
+        Platform::LoadMainInterface();
+        Platform::ReportOnDemandAssetFetch(&ForwardRenderLog);
 
         // Cauda da WebzenScene: passa o controle para a cena de login.
-        Platform::EntrarNaCenaDeLogin();
+        Platform::EnterLoginScene();
     }
 
     emscripten_set_webglcontextlost_callback("#canvas", NULL, EM_FALSE, &OnContextLost);

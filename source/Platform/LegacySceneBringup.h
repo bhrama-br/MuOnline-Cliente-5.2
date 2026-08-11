@@ -14,14 +14,14 @@ namespace Platform
 {
     // Destino das mensagens de progresso. Cada plataforma passa a sua
     // (emscripten_log no Web, __android_log_print no Android).
-    typedef void (*LegacySceneLogger)(const char* mensagem);
+    typedef void (*LegacySceneLogger)(const char* message);
     void SetLegacySceneLogger(LegacySceneLogger logger);
 
     // Etapas, na ordem em que `WebzenScene` as executa. Cada uma devolve false se
     // a anterior nao tiver concluido, entao chamar fora de ordem falha alto em vez
     // de desenhar errado.
     // Definida em LegacyGlobalAllocations.cpp; chamada por CriarCenaDeTitulo.
-    void AlocarGlobaisDoCliente();
+    void AllocateClientGlobals();
 
     // Preenche gProtect->m_MainInfo a partir de um MainInfo.ini em texto puro.
     //
@@ -36,7 +36,7 @@ namespace Platform
     // ja esta montado quando se descobre o endereco.
     //
     // Definida em LegacyClientGlobals.cpp, junto do proprio gProtect.
-    void CarregarMainInfo();
+    void LoadMainInfo();
 
     // Os 28 `Init()` de subsistemas de script que o Winmain chama em 1494-1548. Sem
     // eles cada lua_State fica vazio e toda chamada a um script devolve
@@ -45,10 +45,10 @@ namespace Platform
     void InicializarSubsistemasDeScript();
 
     bool CreateTitleScene(int screenWidth, int screenHeight);
-    bool CenaDeTituloPronta();
+    bool IsTitleSceneReady();
     bool LoadBasicData();
-    bool CarregarInterfacePrincipal();
-    bool EntrarNaCenaDeLogin();
+    bool LoadMainInterface();
+    bool EnterLoginScene();
 
     // Um quadro. Recebe o tamanho ATUAL da area de desenho: quando ele muda, a
     // resolucao do cliente e as fontes sao refeitas.

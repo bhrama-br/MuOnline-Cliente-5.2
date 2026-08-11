@@ -36,36 +36,36 @@ extern bool g_bEnterPressed;
 namespace
 {
     // 0 = solta, 1 = pressionada. Indexada pelo codigo virtual do Win32.
-    unsigned char g_teclas[256] = { 0 };
+    unsigned char g_keyState[256] = { 0 };
 }
 
 namespace Platform
 {
-    void DefinirTeclaLegada(int codigoVirtual, bool pressionada)
+    void SetLegacyKeyState(int codigoVirtual, bool pressionada)
     {
         if (codigoVirtual < 0 || codigoVirtual > 255) return;
-        g_teclas[codigoVirtual] = pressionada ? 1 : 0;
+        g_keyState[codigoVirtual] = pressionada ? 1 : 0;
 
         if (pressionada && codigoVirtual == VK_RETURN)
             g_bEnterPressed = true;
     }
 
-    void LimparTecladoLegado()
+    void ClearLegacyKeyboard()
     {
-        for (int i = 0; i < 256; ++i) g_teclas[i] = 0;
+        for (int i = 0; i < 256; ++i) g_keyState[i] = 0;
     }
 
-    bool TeclaLegadaPressionada(int codigoVirtual)
+    bool IsLegacyKeyDown(int codigoVirtual)
     {
         if (codigoVirtual < 0 || codigoVirtual > 255) return false;
-        return g_teclas[codigoVirtual] != 0;
+        return g_keyState[codigoVirtual] != 0;
     }
 }
 
 // O cliente testa `HIBYTE(GetAsyncKeyState(k)) & 0x80`, entao o bit alto e o que conta.
 SHORT GetAsyncKeyState(int codigoVirtual)
 {
-    return Platform::TeclaLegadaPressionada(codigoVirtual) ? (SHORT)0x8000 : (SHORT)0;
+    return Platform::IsLegacyKeyDown(codigoVirtual) ? (SHORT)0x8000 : (SHORT)0;
 }
 
 // Sem estado de alternancia (Caps/Num Lock): o cliente so consulta o bit alto.

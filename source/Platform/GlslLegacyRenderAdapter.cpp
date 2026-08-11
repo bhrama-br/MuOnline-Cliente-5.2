@@ -38,6 +38,14 @@
 #undef glVertexAttribPointer
 #endif
 
+namespace Platform
+{
+    // Declarado aqui em vez de incluir RenderPipeline.h: este arquivo so precisa do
+    // ponto de descarga do coletor de instancias, e o cabecalho traz a fila de
+    // opacos inteira. Definicao em RenderPipeline.cpp:228.
+    void FlushInstanceBatches();
+}
+
 namespace
 {
 #ifdef _WIN32
@@ -394,7 +402,7 @@ namespace
             m_drawVertices.reserve(8192);
             m_boneRows.reserve(200 * 12);
             m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
-            EsquecerEstadoDeObjetos();
+            ForgetObjectBindings();
             SetIdentity(m_projection);
             SetIdentity(m_modelView);
             SetColor(1.f, 1.f, 1.f, 1.f);
@@ -456,34 +464,34 @@ namespace
         // glActiveTexture 927 chamadas, 99% repetindo a unidade que ja estava ativa;
         // glBindBufferBase 388, 46% repetindo; glBindBuffer 644, 66% repetindo.
         // Sao chamadas que atravessam para o processo de GPU e sao validadas la.
-        void AtivarUnidadeDeTextura(GLenum unidade)
+        void ActivateTextureUnit(GLenum unit)
         {
-            if (m_unidadeTexturaAtiva == unidade) { ++m_frameStats.uniformCallsSaved; return; }
-            glActiveTexture(unidade);
-            m_unidadeTexturaAtiva = unidade;
+            if (m_activeTextureUnit == unit) { ++m_frameStats.uniformCallsSaved; return; }
+            glActiveTexture(unit);
+            m_activeTextureUnit = unit;
         }
-        void LigarUniformBuffer(GLuint buffer)
+        void BindUniformBuffer(GLuint buffer)
         {
-            if (m_uniformBufferLigado == buffer) { ++m_frameStats.uniformCallsSaved; return; }
+            if (m_boundUniformBuffer == buffer) { ++m_frameStats.uniformCallsSaved; return; }
             glBindBuffer(GL_UNIFORM_BUFFER, buffer);
-            m_uniformBufferLigado = buffer;
+            m_boundUniformBuffer = buffer;
         }
-        void LigarPaletaNoBinding0(GLuint buffer)
+        void BindBonePaletteToBinding0(GLuint buffer)
         {
-            if (m_uniformBufferBase0 == buffer) { ++m_frameStats.uniformCallsSaved; return; }
+            if (m_uniformBufferBinding0 == buffer) { ++m_frameStats.uniformCallsSaved; return; }
             glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer);
-            m_uniformBufferBase0 = buffer;
+            m_uniformBufferBinding0 = buffer;
             // glBindBufferBase liga TAMBEM o ponto generico do target; sem refletir
             // isso o espelho de LigarUniformBuffer passaria a mentir.
-            m_uniformBufferLigado = buffer;
+            m_boundUniformBuffer = buffer;
         }
-        void EsquecerEstadoDeObjetos()
+        void ForgetObjectBindings()
         {
             // Sentinela impossivel: 0 e um binding valido (desligado), entao nao
             // serve para dizer "nao sei".
-            m_unidadeTexturaAtiva = 0xFFFFFFFFu;
-            m_uniformBufferLigado = 0xFFFFFFFFu;
-            m_uniformBufferBase0 = 0xFFFFFFFFu;
+            m_activeTextureUnit = 0xFFFFFFFFu;
+            m_boundUniformBuffer = 0xFFFFFFFFu;
+            m_uniformBufferBinding0 = 0xFFFFFFFFu;
         }
 
         // Setters com espelho. Devolvem sem tocar no GL quando o valor ja esta la;
@@ -493,21 +501,21 @@ namespace
         {
             return Platform::IsRenderFeatureActive(Platform::RenderFeatureBatching);
         }
-        void EnviarUniform1i(GLint location, int value, int& espelho)
+        void SendUniform1i(GLint location, int value, int& espelho)
         {
             if (location < 0) return;
             if (UniformCacheActive() && espelho == value) { ++m_frameStats.uniformCallsSaved; return; }
             glUniform1i(location, value);
             espelho = value;
         }
-        void EnviarUniform1f(GLint location, float value, float& espelho)
+        void SendUniform1f(GLint location, float value, float& espelho)
         {
             if (location < 0) return;
             if (UniformCacheActive() && espelho == value) { ++m_frameStats.uniformCallsSaved; return; }
             glUniform1f(location, value);
             espelho = value;
         }
-        void EnviarUniform3f(GLint location, float x, float y, float z, float* espelho)
+        void SendUniform3f(GLint location, float x, float y, float z, float* espelho)
         {
             if (location < 0) return;
             if (UniformCacheActive() && espelho[0] == x && espelho[1] == y && espelho[2] == z)
@@ -651,11 +659,11 @@ namespace
                 m_mvMatrixSent = true;
             }
 
-            const int usarTextura = (m_texture2DEnabled && m_texture != 0) ? 1 : 0;
-            if (usarTextura != m_useTextureSent)
+            const int useTexture = (m_texture2DEnabled && m_texture != 0) ? 1 : 0;
+            if (useTexture != m_useTextureSent)
             {
-                glUniform1i(m_useTextureLocation, usarTextura);
-                m_useTextureSent = usarTextura;
+                glUniform1i(m_useTextureLocation, useTexture);
+                m_useTextureSent = useTexture;
             }
 
             const int alphaTest = m_alphaTestEnabled ? 1 : 0;
@@ -696,7 +704,7 @@ namespace
 
             if (!m_textureSentKnown || m_textureSent != m_texture)
             {
-                AtivarUnidadeDeTextura(GL_TEXTURE0);
+                ActivateTextureUnit(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 m_textureSent = m_texture;
                 m_textureSentKnown = true;
@@ -706,23 +714,23 @@ namespace
             // mexido em nada desde o lote anterior.
             static const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
             SendUniformMatrix4(m_modelLocation, identity, m_modelSent, m_modelSentKnown);
-            EnviarUniform3f(m_drawColorLocation, 1.f, 1.f, 1.f, m_drawColorSent);
-            EnviarUniform1i(m_skinningLocation, 0, m_skinningSent);
-            EnviarUniform1i(m_lightingLocation, 0, m_lightingSent);
-            EnviarUniform1f(m_bodyScaleLocation, 1.f, m_bodyScaleSent);
-            EnviarUniform3f(m_postTranslationLocation, 0.f, 0.f, 0.f, m_postTranslationSent);
-            EnviarUniform1i(m_waveLocation, 0, m_waveSent);
-            EnviarUniform1i(m_materialEffectLocation, 0, m_materialEffectSent);
+            SendUniform3f(m_drawColorLocation, 1.f, 1.f, 1.f, m_drawColorSent);
+            SendUniform1i(m_skinningLocation, 0, m_skinningSent);
+            SendUniform1i(m_lightingLocation, 0, m_lightingSent);
+            SendUniform1f(m_bodyScaleLocation, 1.f, m_bodyScaleSent);
+            SendUniform3f(m_postTranslationLocation, 0.f, 0.f, 0.f, m_postTranslationSent);
+            SendUniform1i(m_waveLocation, 0, m_waveSent);
+            SendUniform1i(m_materialEffectLocation, 0, m_materialEffectSent);
             // uShadowMap e uBoneScale nao eram zerados aqui. Com skinning=0 o
             // shader ignora boneScale, mas shadowMap deforma a posicao mesmo sem
             // skinning: deixa-lo ligado de um DrawStaticMesh anterior achataria a
             // geometria imediata seguinte.
-            EnviarUniform1i(m_shadowMapLocation, 0, m_shadowMapSent);
+            SendUniform1i(m_shadowMapLocation, 0, m_shadowMapSent);
             // OBRIGATORIO. Um atributo de vertice DESABILITADO le (0,0,0,1), nao
             // lixo: com uInstanced preso em 1 apos um draw instanciado, o caminho
             // imediato passaria a tirar a cor de iColor.rgb, que vale (0,0,0), e
             // desenharia UI, sprites e terreno pretos.
-            EnviarUniform1i(m_instancedLocation, 0, m_instancedSent);
+            SendUniform1i(m_instancedLocation, 0, m_instancedSent);
 
             if (!m_vaoActive)
             {
@@ -731,7 +739,7 @@ namespace
                 m_vaoActive = true;
             }
             const GLsizeiptr uploadBytes = static_cast<GLsizeiptr>(drawVertexCount * sizeof(LegacyVertex));
-            GarantirCapacidadeDeVertices(uploadBytes);
+            EnsureVertexBufferCapacity(uploadBytes);
             glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBytes, drawVertexData);
             ++m_frameStats.bufferSubDataCalls;
             if (indexedQuads)
@@ -839,6 +847,57 @@ namespace
             // valores de projecao/modelview.
             if (projectionChanged || modelViewChanged)
                 FlushPendingBatch(FlushMatrix);
+            if (projectionChanged)
+            {
+                // O COLETOR DE INSTANCIAS TEM DE SAIR AQUI TAMBEM, e por muito tempo
+                // nao saia. Ele guarda textura, blend e profundidade por VALOR e os
+                // reaplica no flush (ZzzBMD.cpp:1944), mas a MATRIZ nao: o lote
+                // adiado desenha com a projecao/modelview vigentes no momento da
+                // descarga, nao com as que valiam na emissao.
+                //
+                // O sintoma era item invisivel no inventario. O item de inventario
+                // e um BMD opaco e reordenavel, entao entra no balde em vez de
+                // desenhar (ZzzBMD.cpp:1882); o passe de UI terminava sem nenhuma
+                // barreira e o balde so era descarregado no passe de mundo do frame
+                // SEGUINTE, ja com a matriz da camera -- o item saia em coordenada
+                // de tela dentro do mundo 3D, ou seja, em lugar nenhum. Ele voltava
+                // a aparecer quando um segundo item forcava
+                // `orderMattersHere` ainda dentro da UI, o que explica "invisivel
+                // ate pegar outro item": a descarga era acidental, e sempre faltava
+                // uma para o ultimo item desenhado.
+                //
+                // ANTES do memcpy, de proposito: as instancias adiadas precisam da
+                // matriz ANTIGA, que e a que estava valendo quando foram emitidas.
+                //
+                // SO NA PROJECAO, e isso e uma escolha medida, nao um descuido. A
+                // primeira versao descarregava tambem na modelview e custou FPS no
+                // PC: a modelview muda por objeto no passe de mundo, entao o balde
+                // era esvaziado antes de acumular e o instancing virava um draw por
+                // malha. A projecao, ao contrario, so muda na troca de REGIME --
+                // mundo 3D, previa de item, ortho da UI -- que e exatamente onde o
+                // lote adiado ficaria com a matriz errada. A previa de item entra e
+                // sai por projecao: gluPerspective2 em NewUI3DRenderMng.cpp:125 e
+                // PopLegacyRenderMatrixSnapshot em ZzzOpenglUtil.cpp:1115.
+                //
+                // RISCO RESIDUAL, declarado: um balde aberto que atravesse uma troca
+                // de modelview sem troca de projecao desenharia com a modelview
+                // nova. O caminho instanciado exige que a pose esteja toda na paleta
+                // (ver o comentario de canInstance em ZzzBMD.cpp:1874), ou seja a
+                // modelview desses draws e a da camera; se algum objeto dependesse da
+                // pilha GL para se posicionar, o instancing ja apareceria fora de
+                // lugar hoje. `-instancing=compare` alterna os dois caminhos por
+                // frame e essa divergencia sairia como cintilacao.
+                //
+                // Reentrancia coberta: ApplyInstanceBatchState mexe em estado legado
+                // que pode voltar a SetMatrices, e a guarda `flushing` de
+                // FlushInstanceBatch (ZzzBMD.cpp:387) transforma a chamada interna
+                // em no-op.
+                //
+                // Isto NAO e reversivel por flag e nao deve ser: sem a barreira o
+                // caminho instanciado esta incorreto. Quem quiser o caminho antigo
+                // usa -instancing=off, que impede o balde de existir.
+                Platform::FlushInstanceBatches();
+            }
             if (projectionChanged) memcpy(m_projection, projection, sizeof(m_projection));
             if (modelViewChanged) memcpy(m_modelView, modelView, sizeof(m_modelView));
             m_matricesSet = true;
@@ -951,7 +1010,7 @@ namespace
             m_vertexArray = 0;
             m_boneBuffer = 0;
             m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
-            EsquecerEstadoDeObjetos();
+            ForgetObjectBindings();
             m_boneBufferIndex = 0;
             m_projectionLocation = -1;
             m_modelViewLocation = -1;
@@ -1012,13 +1071,13 @@ namespace
                 glUniform1i(m_textureLocation, 0);
                 m_textureUnitSent = true;
             }
-            EnviarUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0, m_useTextureSent);
-            EnviarUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0, m_alphaTestSent);
-            EnviarUniform1f(m_alphaRefLocation, m_alphaTestReference, m_alphaRefSent);
-            EnviarUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0, m_fogSent);
-            EnviarUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2], m_fogColorSent);
-            EnviarUniform1f(m_fogStartLocation, m_fogStart, m_fogStartSent);
-            EnviarUniform1f(m_fogEndLocation, m_fogEnd, m_fogEndSent);
+            SendUniform1i(m_useTextureLocation, (m_texture2DEnabled && m_texture != 0) ? 1 : 0, m_useTextureSent);
+            SendUniform1i(m_alphaTestLocation, m_alphaTestEnabled ? 1 : 0, m_alphaTestSent);
+            SendUniform1f(m_alphaRefLocation, m_alphaTestReference, m_alphaRefSent);
+            SendUniform1i(m_fogLocation, m_fogEnabled ? 1 : 0, m_fogSent);
+            SendUniform3f(m_fogColorLocation, m_fogColor[0], m_fogColor[1], m_fogColor[2], m_fogColorSent);
+            SendUniform1f(m_fogStartLocation, m_fogStart, m_fogStartSent);
+            SendUniform1f(m_fogEndLocation, m_fogEnd, m_fogEndSent);
             SendUniformMatrix4(m_projectionLocation, m_projection, m_projSent, m_projMatrixSent);
             SendUniformMatrix4(m_modelViewLocation, m_modelView, m_mvSent, m_mvMatrixSent);
         }
@@ -1035,7 +1094,7 @@ namespace
                 if (m_bonePaletteTexture == 0) { m_instancingUnavailable = true; return false; }
                 m_bonePaletteWidth = 0;
                 m_bonePaletteHeight = 0;
-                AtivarUnidadeDeTextura(GL_TEXTURE1);
+                ActivateTextureUnit(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
                 // texelFetch nao filtra, mas GL exige filtro completo para a
                 // textura ser considerada valida.
@@ -1043,7 +1102,7 @@ namespace
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                AtivarUnidadeDeTextura(GL_TEXTURE0);
+                ActivateTextureUnit(GL_TEXTURE0);
                 m_textureSentKnown = false;
             }
             if (m_instanceBuffer == 0)
@@ -1137,7 +1196,7 @@ namespace
             ++m_frameStats.staticMeshCacheHits;
             const StaticMesh& mesh = *resolved;
             SetupSharedStaticMeshUniforms();
-            EnviarUniform1i(m_instancedLocation, 0, m_instancedSent);
+            SendUniform1i(m_instancedLocation, 0, m_instancedSent);
             const float model[16] = {
                 modelMatrix[0], modelMatrix[4], modelMatrix[8], 0.f,
                 modelMatrix[1], modelMatrix[5], modelMatrix[9], 0.f,
@@ -1146,25 +1205,25 @@ namespace
             SendUniformMatrix4(m_modelLocation, model, m_modelSent, m_modelSentKnown);
             // Nao limite a cor antes da iluminacao no vertex shader. No caminho
             // legado, a saturacao acontece apos BodyLight * IntensityTransform.
-            EnviarUniform3f(m_drawColorLocation, color[0], color[1], color[2], m_drawColorSent);
+            SendUniform3f(m_drawColorLocation, color[0], color[1], color[2], m_drawColorSent);
             const bool skinning = boneMatrices != NULL && boneCount > 0 && boneCount <= 200 && m_boneBlockIndex != GL_INVALID_INDEX;
-            EnviarUniform1i(m_skinningLocation, skinning ? 1 : 0, m_skinningSent);
-            EnviarUniform1i(m_lightingLocation, lighting ? 1 : 0, m_lightingSent);
-            EnviarUniform1f(m_bodyScaleLocation, bodyScale, m_bodyScaleSent);
+            SendUniform1i(m_skinningLocation, skinning ? 1 : 0, m_skinningSent);
+            SendUniform1i(m_lightingLocation, lighting ? 1 : 0, m_lightingSent);
+            SendUniform1f(m_bodyScaleLocation, bodyScale, m_bodyScaleSent);
             if (postTranslation != NULL)
-                EnviarUniform3f(m_postTranslationLocation, postTranslation[0], postTranslation[1], postTranslation[2], m_postTranslationSent);
-            EnviarUniform1i(m_waveLocation, wave ? 1 : 0, m_waveSent);
+                SendUniform3f(m_postTranslationLocation, postTranslation[0], postTranslation[1], postTranslation[2], m_postTranslationSent);
+            SendUniform1i(m_waveLocation, wave ? 1 : 0, m_waveSent);
             // uWorldTime so entra na conta quando wave ou um efeito de material o
             // usa; enviar por malha em cena parada era puro trafego.
             if (wave || materialEffect != 0)
-                EnviarUniform1f(m_worldTimeLocation, worldTime, m_worldTimeSent);
-            EnviarUniform1i(m_materialEffectLocation, materialEffect, m_materialEffectSent);
-            EnviarUniform1i(m_shadowMapLocation, shadowMap ? 1 : 0, m_shadowMapSent);
+                SendUniform1f(m_worldTimeLocation, worldTime, m_worldTimeSent);
+            SendUniform1i(m_materialEffectLocation, materialEffect, m_materialEffectSent);
+            SendUniform1i(m_shadowMapLocation, shadowMap ? 1 : 0, m_shadowMapSent);
             if (shadowMap && bodyOrigin != NULL)
-                EnviarUniform3f(m_bodyOriginLocation, bodyOrigin[0], bodyOrigin[1], bodyOrigin[2], m_bodyOriginSent);
-            EnviarUniform1f(m_boneScaleLocation, boneScale, m_boneScaleSent);
+                SendUniform3f(m_bodyOriginLocation, bodyOrigin[0], bodyOrigin[1], bodyOrigin[2], m_bodyOriginSent);
+            SendUniform1f(m_boneScaleLocation, boneScale, m_boneScaleSent);
             if (lighting && lightPosition != NULL)
-                EnviarUniform3f(m_lightPositionLocation, lightPosition[0], lightPosition[1], lightPosition[2], m_lightPositionSent);
+                SendUniform3f(m_lightPositionLocation, lightPosition[0], lightPosition[1], lightPosition[2], m_lightPositionSent);
             if (skinning)
             {
                 std::vector<float>& rows = m_boneRows;
@@ -1187,7 +1246,7 @@ namespace
                     memcpy(&rows[0], boneMatrices, byteCount);
                     m_boneBuffer = m_boneBuffers[m_boneBufferIndex];
                     m_boneBufferIndex = (m_boneBufferIndex + 1) % 3;
-                    LigarUniformBuffer(m_boneBuffer);
+                    BindUniformBuffer(m_boneBuffer);
                     // Sem orphaning por pose: os tres buffers ja nascem com o bloco
                     // inteiro em CreateProgram e a rotacao entre eles ja evita gravar
                     // onde o GPU ainda le. Um glBufferData por pose custava 213
@@ -1198,12 +1257,12 @@ namespace
                     ++m_frameStats.bufferSubDataCalls;
                     m_frameStats.bonePaletteUploadBytes += static_cast<unsigned long long>(byteCount);
                 }
-                LigarUniformBuffer(m_boneBuffer);
-                LigarPaletaNoBinding0(m_boneBuffer);
+                BindUniformBuffer(m_boneBuffer);
+                BindBonePaletteToBinding0(m_boneBuffer);
             }
             if (!UniformCacheActive() || !m_textureSentKnown || m_textureSent != m_texture)
             {
-                AtivarUnidadeDeTextura(GL_TEXTURE0);
+                ActivateTextureUnit(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 m_textureSent = m_texture;
                 m_textureSentKnown = true;
@@ -1262,7 +1321,7 @@ namespace
             for (size_t i = 0; i < count; ++i)
                 memcpy(&m_instancePalette[i * rowTexels * 4], instances[i].boneMatrices, boneCount * 12 * sizeof(float));
 
-            AtivarUnidadeDeTextura(GL_TEXTURE1);
+            ActivateTextureUnit(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
             // glTexImage2D REALOCA o armazenamento. Chamado por lote, ele criava
             // uma bolha de pipeline por draw e foi metade do custo que fez o
@@ -1321,15 +1380,15 @@ namespace
             }
 
             SetupSharedStaticMeshUniforms();
-            EnviarUniform1i(m_instancedLocation, 1, m_instancedSent);
+            SendUniform1i(m_instancedLocation, 1, m_instancedSent);
             // Incondicional aqui: o lote pode misturar instancias com e sem wave
             // ou efeito de material, e nao ha como saber pela chave — justamente
             // porque esses flags foram tirados dela de proposito.
-            EnviarUniform1f(m_worldTimeLocation, worldTime, m_worldTimeSent);
+            SendUniform1f(m_worldTimeLocation, worldTime, m_worldTimeSent);
             if (m_bonePaletteLocation >= 0)
                 glUniform1i(m_bonePaletteLocation, 1);
 
-            AtivarUnidadeDeTextura(GL_TEXTURE0);
+            ActivateTextureUnit(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_texture);
             m_textureSent = m_texture;
             m_textureSentKnown = true;
@@ -1491,7 +1550,7 @@ namespace
         // de realocacao no descarte do anel. O custo do bufferSubData aqui NAO e
         // conflito de acesso; e o volume: 956 chamadas e 2,88 MB por quadro, porque o
         // caminho imediato reenvia a geometria toda a cada quadro.
-        void GarantirCapacidadeDeVertices(GLsizeiptr requiredBytes)
+        void EnsureVertexBufferCapacity(GLsizeiptr requiredBytes)
         {
             if (requiredBytes <= m_vertexBufferCapacity)
                 return;
@@ -1656,11 +1715,11 @@ namespace
             // deste programa (UI, sprites, terreno) morria com GL_INVALID_OPERATION.
             for (int i = 0; i < 3; ++i)
             {
-                LigarUniformBuffer(m_boneBuffers[i]);
+                BindUniformBuffer(m_boneBuffers[i]);
                 glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(kBoneBlockBytes), NULL, GL_STREAM_DRAW);
             }
-            LigarUniformBuffer(m_boneBuffer);
-            LigarPaletaNoBinding0(m_boneBuffer);
+            BindUniformBuffer(m_boneBuffer);
+            BindBonePaletteToBinding0(m_boneBuffer);
             glBindVertexArray(m_vertexArray);
             glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_quadIndexBuffer);
@@ -1706,9 +1765,9 @@ namespace
         GLuint m_boneBuffer;
         GLuint m_boneBuffers[3];
         // Espelho do estado de objeto; ver AtivarUnidadeDeTextura.
-        GLenum m_unidadeTexturaAtiva;
-        GLuint m_uniformBufferLigado;
-        GLuint m_uniformBufferBase0;
+        GLenum m_activeTextureUnit;
+        GLuint m_boundUniformBuffer;
+        GLuint m_uniformBufferBinding0;
         unsigned int m_boneBufferIndex;
         GLint m_textureLocation;
         GLint m_useTextureLocation;

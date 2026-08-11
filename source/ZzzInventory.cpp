@@ -10695,6 +10695,58 @@ void RenderObjectScreen(int Type,int ItemLevel,int Option1,int ExtOption,vec3_t 
 
     Vector(1.f,1.f,1.f,Light);
 
+	// DIAGNOSTICO TEMPORARIO (arma/set pego do chao fica invisivel no inventario ate
+	// relogar; ocorre no PC tambem, 2026-08-11). Uma linha na PRIMEIRA vez que cada
+	// tipo e desenhado: com o mesmo item invisivel agora e visivel depois do relog,
+	// a comparacao das duas linhas diz qual grandeza esta errada.
+	// Remover quando a causa estiver identificada.
+#if defined(__EMSCRIPTEN__)
+	{
+		// Reemite a MESMA peca a cada ~600 desenhos dela, nao so na primeira vez: a
+		// comparacao que interessa e a peca invisivel contra ela mesma depois de outro
+		// item ser pego, e para isso as duas linhas tem de existir.
+		static int seenTypes[64];
+		static int renderCount[64];
+		static int seenTypeCount = 0;
+		int slot = -1;
+		for (int i = 0; i < seenTypeCount; ++i)
+			if (seenTypes[i] == Type) { slot = i; break; }
+		if (slot < 0 && seenTypeCount < 64)
+		{
+			slot = seenTypeCount++;
+			seenTypes[slot] = Type;
+			renderCount[slot] = 0;
+		}
+		if (slot >= 0 && (renderCount[slot]++ % 600) == 0)
+		{
+			// Models[Type] e a PECA que RenderPartObject desenha. Models[objTipo] e
+			// so o esqueleto quando a peca e de armadura (Player.bmd tem 0 malhas de
+			// proposito), entao o numero que decide se algo aparece e meshsPeca.
+			//
+			// texGL=0 significa desenhar SEM textura: CGlobalBitmap::GetTexture
+			// devolve um BITMAP_t zerado quando o indice nao esta no mapa, e isso sai
+			// na tela como item invisivel. E a hipotese que este log testa -- se a
+			// peca invisivel mostra texGL=0 e a mesma peca, depois de pegar uma pocao,
+			// mostra texGL!=0, a causa e a textura nao registrada no momento do pickup.
+			char text[220];
+			int used = snprintf(text, sizeof(text),
+			        "[item3d] Type=%d objTipo=%d meshsPeca=%d escala=%.4f nivel=%d tex:",
+			        Type, (int)ObjectSelect.Type, (int)Models[Type].NumMeshs,
+			        Scale, ItemLevel);
+			BMD* piece = &Models[Type];
+			for (int m = 0; m < piece->NumMeshs && used < (int)sizeof(text) - 32; ++m)
+			{
+				const GLuint idx = piece->IndexTexture[m];
+				BITMAP_t* bmp = Bitmaps.GetTexture(idx);
+				used += snprintf(text + used, sizeof(text) - used,
+				                  " [idx=%u texGL=%u %.0fx%.0f]",
+				                  idx, bmp ? bmp->TextureNumber : 0u,
+				                  bmp ? bmp->Width : 0.f, bmp ? bmp->Height : 0.f);
+			}
+			fprintf(stderr, "%s\n", text);
+		}
+	}
+#endif
     RenderPartObject(o,Type,NULL,Light,alpha,ItemLevel,Option1,ExtOption,true,true,true);
 }
 

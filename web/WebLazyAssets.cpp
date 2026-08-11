@@ -31,27 +31,27 @@ namespace
     // varias extensoes para o mesmo asset (.jpg, .OZJ, .tga, .OZT), entao a
     // falha e um caminho NORMAL, nao excepcional: sem cache negativo, cada
     // tentativa custaria uma viagem ate o servidor.
-    const int kMaxAusentes = 512;
-    char g_ausentes[kMaxAusentes][256];
-    int  g_totalAusentes = 0;
+    const int kMaxMissing = 512;
+    char g_missing[kMaxMissing][256];
+    int  g_missingTotal = 0;
 
     // Contadores para o relatorio: quanto o carregamento sob demanda de fato
     // buscou, contra os 35 MB que o pacote trazia de antemao.
-    int  g_buscados = 0;
-    long g_bytesBuscados = 0;
+    int  g_fetched = 0;
+    long g_fetchedBytes = 0;
 
     bool JaFalhou(const char* path)
     {
-        for (int i = 0; i < g_totalAusentes; ++i)
-            if (strcmp(g_ausentes[i], path) == 0) return true;
+        for (int i = 0; i < g_missingTotal; ++i)
+            if (strcmp(g_missing[i], path) == 0) return true;
         return false;
     }
 
-    void MarcarAusente(const char* path)
+    void MarkMissing(const char* path)
     {
-        if (g_totalAusentes >= kMaxAusentes) return;
-        if (strlen(path) >= sizeof(g_ausentes[0])) return;
-        strcpy(g_ausentes[g_totalAusentes++], path);
+        if (g_missingTotal >= kMaxMissing) return;
+        if (strlen(path) >= sizeof(g_missing[0])) return;
+        strcpy(g_missing[g_missingTotal++], path);
     }
 
     // Rastro de cada tentativa. Deixar LIGADO custa caro -- sao milhares de
@@ -83,44 +83,44 @@ namespace
     //
     // Se algo for pedido de novo depois de sair do anel, a proxima abertura falha e a
     // busca acontece outra vez -- mais lento, e correto.
-    const int kAnelMemfs = 8;
-    char g_anel[kAnelMemfs][256];
-    int  g_anelProximo = 0;
-    bool g_anelCheio = false;
-    long g_bytesLiberados = 0;
-    int  g_arquivosLiberados = 0;
+    const int kMemfsRing = 8;
+    char g_ring[kMemfsRing][256];
+    int  g_ringNext = 0;
+    bool g_ringFull = false;
+    long g_freedBytes = 0;
+    int  g_freedFiles = 0;
 
     void LembrarNoMemfs(const char* path)
     {
-        if (strlen(path) >= sizeof(g_anel[0])) return;
+        if (strlen(path) >= sizeof(g_ring[0])) return;
 
         // A posicao que vamos ocupar guarda o mais antigo: apaga antes de sobrescrever.
-        if (g_anelCheio && g_anel[g_anelProximo][0] != '\0')
+        if (g_ringFull && g_ring[g_ringNext][0] != '\0')
         {
-            const int liberados = EM_ASM_INT({
+            const int freed = EM_ASM_INT({
                 var path = UTF8ToString($0);
                 try {
                     var size = FS.stat(path).size;
                     FS.unlink(path);
                     return size;
                 } catch (e) { return 0; }
-            }, g_anel[g_anelProximo]);
-            if (liberados > 0)
+            }, g_ring[g_ringNext]);
+            if (freed > 0)
             {
-                g_bytesLiberados += liberados;
-                ++g_arquivosLiberados;
+                g_freedBytes += freed;
+                ++g_freedFiles;
             }
         }
 
-        strcpy(g_anel[g_anelProximo], path);
-        g_anelProximo = (g_anelProximo + 1) % kAnelMemfs;
-        if (g_anelProximo == 0) g_anelCheio = true;
+        strcpy(g_ring[g_ringNext], path);
+        g_ringNext = (g_ringNext + 1) % kMemfsRing;
+        if (g_ringNext == 0) g_ringFull = true;
     }
 
-    bool BuscarSincrono(const char* path)
+    bool FetchSynchronously(const char* path)
     {
         if (kRastrearTentativas ||
-            (kRastrearAPartirDe > 0 && g_buscados >= kRastrearAPartirDe))
+            (kRastrearAPartirDe > 0 && g_fetched >= kRastrearAPartirDe))
             emscripten_log(EM_LOG_ERROR, "tentando: %s", path);
 
         // Rastro FILTRADO: so os caminhos que contem esta substring. Rastrear
@@ -145,10 +145,10 @@ namespace
             try { xhr.send(null); } catch (e) { return -1; }
             if (xhr.status !== 200 && xhr.status !== 0) return -1;
 
-            var texto = xhr.responseText;
-            var data = new Uint8Array(texto.length);
-            for (var i = 0; i < texto.length; ++i)
-                data[i] = texto.charCodeAt(i) & 0xFF;
+            var text = xhr.responseText;
+            var data = new Uint8Array(text.length);
+            for (var i = 0; i < text.length; ++i)
+                data[i] = text.charCodeAt(i) & 0xFF;
 
             var barra = path.lastIndexOf('/');
             if (barra > 0) {
@@ -184,26 +184,26 @@ namespace
             // ao limite dentro de Data/Object95 e as texturas do ceu (que vem depois)
             // nunca apareciam. Um corte silencioso num log de diagnostico faz a
             // lista parecer completa quando nao e.
-            if (g_totalAusentes < kMaxAusentes)
+            if (g_missingTotal < kMaxMissing)
                 emscripten_log(EM_LOG_ERROR, "  ausente: %s", path);
-            else if (g_totalAusentes == kMaxAusentes)
+            else if (g_missingTotal == kMaxMissing)
                 emscripten_log(EM_LOG_ERROR, "  ausente: (limite de %d atingido; "
-                               "os proximos nao serao listados)", kMaxAusentes);
-            MarcarAusente(path);
+                               "os proximos nao serao listados)", kMaxMissing);
+            MarkMissing(path);
             return false;
         }
-        ++g_buscados;
-        g_bytesBuscados += bytes;
+        ++g_fetched;
+        g_fetchedBytes += bytes;
         LembrarNoMemfs(path);
 
         // Sinal de progresso durante cargas longas. Sem isto, uma carga que
         // trava e indistinguivel de uma que so esta demorando: as duas mostram
         // uma aba parada.
-        if ((g_buscados % 100) == 0)
+        if ((g_fetched % 100) == 0)
         {
             char line[300];
             snprintf(line, sizeof(line), "  ... %d arquivos (%.1f MB), ultimo: %s",
-                     g_buscados, g_bytesBuscados / (1024.0 * 1024.0), path);
+                     g_fetched, g_fetchedBytes / (1024.0 * 1024.0), path);
             emscripten_log(EM_LOG_ERROR, "%s", line);
         }
         return true;
@@ -212,19 +212,19 @@ namespace
 
 namespace Platform
 {
-    void InstalarBuscaSobDemanda()
+    void InstallOnDemandAssetFetch()
     {
-        SetLegacyAssetFetchHook(&BuscarSincrono);
+        SetLegacyAssetFetchHook(&FetchSynchronously);
     }
 
-    void RelatarBuscaSobDemanda(void (*log)(const char*))
+    void ReportOnDemandAssetFetch(void (*log)(const char*))
     {
         char line[200];
         snprintf(line, sizeof(line),
                  "assets sob demanda: %d arquivos, %.1f MB (%d ausentes em cache; "
                  "%d liberados do MEMFS, %.1f MB)",
-                 g_buscados, g_bytesBuscados / (1024.0 * 1024.0), g_totalAusentes,
-                 g_arquivosLiberados, g_bytesLiberados / (1024.0 * 1024.0));
+                 g_fetched, g_fetchedBytes / (1024.0 * 1024.0), g_missingTotal,
+                 g_freedFiles, g_freedBytes / (1024.0 * 1024.0));
         log(line);
     }
 }

@@ -30,16 +30,16 @@ namespace Platform
     // sintetico que substitui o EDIT nativo do Windows em CUITextInputBox. Os
     // backends de plataforma chamam estas funcoes ao receber teclas; quando devolvem
     // false nao ha campo em foco e a tecla pertence ao jogo.
-    bool HaFocoDeTexto();
-    bool EnviarCaractereDeTexto(unsigned int codigo);       // equivale a WM_CHAR
-    bool EnviarTeclaDeTexto(unsigned int codigoVirtual);    // equivale a WM_KEYDOWN
+    bool HasTextFieldFocus();
+    bool SendTextCharacter(unsigned int codigo);       // equivale a WM_CHAR
+    bool SendTextKey(unsigned int codigoVirtual);    // equivale a WM_KEYDOWN
 
     // Teclado -> jogo. Implementadas em Platform/PlatformKeyboard.cpp; alimentam a
     // tabela que GetAsyncKeyState responde, e com ela SEASON3B::IsPress/IsRepeat e
     // CInput::IsKeyDown -- ou seja, todos os atalhos do cliente.
-    void DefinirTeclaLegada(int codigoVirtual, bool pressionada);
-    void LimparTecladoLegado();
-    bool TeclaLegadaPressionada(int codigoVirtual);
+    void SetLegacyKeyState(int codigoVirtual, bool pressionada);
+    void ClearLegacyKeyboard();
+    bool IsLegacyKeyDown(int codigoVirtual);
 
     IInputBackend& GetInputBackend();
     void SetInputBackend(IInputBackend* backend);

@@ -139,13 +139,13 @@ BOOL CSimpleModulus::LoadKey(char* lpszFileName, unsigned short sID,
     FILE* file = Platform::LegacyFileOpen(lpszFileName, "rb");
     if (file == NULL) return FALSE;
 
-    BYTE conteudo[128];
-    memset(conteudo, 0, sizeof(conteudo));
-    const size_t lidos = fread(conteudo, 1, sizeof(conteudo), file);
+    BYTE content[128];
+    memset(content, 0, sizeof(content));
+    const size_t readCount = fread(content, 1, sizeof(content), file);
     fclose(file);
 
-    if (lidos < (size_t)kKeyBytes) return FALSE;
-    return LoadKeyFromBuffer(conteudo, bMod, bEnc, bDec, bXOR);
+    if (readCount < (size_t)kKeyBytes) return FALSE;
+    return LoadKeyFromBuffer(content, bMod, bEnc, bDec, bXOR);
 }
 
 BOOL CSimpleModulus::LoadAllKey(char* lpszFileName)

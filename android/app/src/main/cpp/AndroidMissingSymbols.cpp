@@ -45,20 +45,21 @@ namespace
     }
 }
 
-// funcoes ausentes: 63
-extern "C" void* mu_missing_fn_0() asm("_Z11GetCheckSumt");
-extern "C" void* mu_missing_fn_0() { static bool reported = false; return Unimplemented("_Z11GetCheckSumt", &reported); }  // GetCheckSum(unsigned short)
+// funcoes ausentes: 59
+//
+// QUATRO STUBS SAIRAM DAQUI (2026-08-11): GetCheckSum, Util_CheckOption,
+// CheckHack e TrayMode::SwitchState. Eles nasceram quando o alvo Android
+// linkava so a camada Platform; agora que libmu_legacy_scene.a entra no link,
+// as implementacoes REAIS existem e o stub virava `duplicate symbol` -- o link
+// do arm64-v8a parava nos quatro. Quem regerar esta lista precisa filtrar
+// contra os simbolos que a biblioteca de cena ja define, senao eles voltam.
 extern "C" void* mu_missing_fn_1() { static bool reported = false; return Unimplemented("_Z12CloseMainExev", &reported); }  // CloseMainExe()
 extern "C" void* mu_missing_fn_2() { static bool reported = false; return Unimplemented("_Z12KillGLWindowv", &reported); }  // KillGLWindow()
 extern "C" void* mu_missing_fn_3() { static bool reported = false; return Unimplemented("_Z13DestroyWindowv", &reported); }  // DestroyWindow()
-extern "C" void* mu_missing_fn_4() asm("_Z16Util_CheckOptionPchS_");
-extern "C" void* mu_missing_fn_4() { static bool reported = false; return Unimplemented("_Z16Util_CheckOptionPchS_", &reported); }  // Util_CheckOption(char*, unsigned char, char*)
 extern "C" void* mu_missing_fn_5() asm("_Z17TERRAIN_ATTRIBUTEff");
 extern "C" void* mu_missing_fn_5() { static bool reported = false; return Unimplemented("_Z17TERRAIN_ATTRIBUTEff", &reported); }  // TERRAIN_ATTRIBUTE(float, float)
 extern "C" void* mu_missing_fn_6() asm("_Z19RegisterClassObjectP9lua_State");
 extern "C" void* mu_missing_fn_6() { static bool reported = false; return Unimplemented("_Z19RegisterClassObjectP9lua_State", &reported); }  // RegisterClassObject(lua_State*)
-extern "C" void* mu_missing_fn_7() asm("_Z9CheckHackv");
-extern "C" void* mu_missing_fn_7() { static bool reported = false; return Unimplemented("_Z9CheckHackv", &reported); }  // CheckHack()
 extern "C" void* mu_missing_fn_8() asm("_ZN10DOSConsole5WriteEbPKcz");
 extern "C" void* mu_missing_fn_8() { static bool reported = false; return Unimplemented("_ZN10DOSConsole5WriteEbPKcz", &reported); }  // DOSConsole::Write(bool, char const*, ...)
 extern "C" void* mu_missing_fn_9() asm("_ZN11CBannerInfo9SetBannerENSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES6_b");
@@ -126,8 +127,6 @@ extern "C" void* mu_missing_fn_45() { static bool reported = false; return Unimp
 extern "C" void* mu_missing_fn_46() { static bool reported = false; return Unimplemented("_ZN7CWsctlc9GetSocketEv", &reported); }  // CWsctlc::GetSocket()
 extern "C" void* mu_missing_fn_47() { static bool reported = false; return Unimplemented("_ZN7CWsctlcC1Ev", &reported); }  // CWsctlc::CWsctlc()
 extern "C" void* mu_missing_fn_48() { static bool reported = false; return Unimplemented("_ZN7CWsctlcD1Ev", &reported); }  // CWsctlc::~CWsctlc()
-extern "C" void* mu_missing_fn_49() asm("_ZN8TrayMode11SwitchStateEv");
-extern "C" void* mu_missing_fn_49() { static bool reported = false; return Unimplemented("_ZN8TrayMode11SwitchStateEv", &reported); }  // TrayMode::SwitchState()
 extern "C" void* mu_missing_fn_50() asm("_ZN8WZResult15GetErrorMessageEv");
 extern "C" void* mu_missing_fn_50() { static bool reported = false; return Unimplemented("_ZN8WZResult15GetErrorMessageEv", &reported); }  // WZResult::GetErrorMessage()
 extern "C" void* mu_missing_fn_51() asm("_ZN8WZResult18BuildSuccessResultEv");

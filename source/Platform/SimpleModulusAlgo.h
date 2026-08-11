@@ -39,20 +39,20 @@ namespace SimpleModulusAlgo
 
     // Le um arquivo de chave ja em memoria. `chave` recebe o bloco do meio, que
     // e a chave de cifragem ou de decifragem conforme o arquivo.
-    inline bool ReadKeys(const u8* conteudo, int size,
+    inline bool ReadKeys(const u8* content, int size,
                           u32* modulus, u32* key, u32* keyXor)
     {
-        if (conteudo == 0 || size < kKeyBytes) return false;
+        if (content == 0 || size < kKeyBytes) return false;
 
         u16 id;
-        memcpy(&id, conteudo, sizeof(id));
+        memcpy(&id, content, sizeof(id));
         if (id != kSingleKeyId) return false;
 
-        const u8* corpo = conteudo + kKeyHeader;
+        const u8* body = content + kKeyHeader;
         for (int i = 0; i < kKeyCount * 3; ++i)
         {
             u32 bruto;
-            memcpy(&bruto, corpo + i * 4, sizeof(bruto));
+            memcpy(&bruto, body + i * 4, sizeof(bruto));
             const u32 value = bruto ^ kFileMask[i % kKeyCount];
 
             if (i < kKeyCount)                 modulus[i] = value;
@@ -178,13 +178,13 @@ namespace SimpleModulusAlgo
 
         // 4) Dois bytes de verificacao: soma XOR dos 8 bytes de ENTRADA a partir
         //    de 0xF8, e o tamanho misturado com ela.
-        u8 verificacao = 0xF8;
+        u8 checksum = 0xF8;
         for (int i = 0; i < kInputBlock; ++i)
-            verificacao ^= source[i];
+            checksum ^= source[i];
 
         u8 par[2];
-        par[0] = (u8)(((u8)sourceByteCount ^ 0x3D) ^ verificacao);
-        par[1] = verificacao;
+        par[0] = (u8)(((u8)sourceByteCount ^ 0x3D) ^ checksum);
+        par[1] = checksum;
         AppendBits(destination, bits, par, 0, 16);
     }
 
@@ -234,14 +234,14 @@ namespace SimpleModulusAlgo
         //    tamanho. Sem isso um bloco corrompido passaria como dado valido.
         u8 par[2] = { 0, 0 };
         AppendBits(par, 0, source, bits, 16);
-        const u8 verificacaoGravada = par[1];
+        const u8 storedChecksum = par[1];
         const u8 size = (u8)((par[1] ^ par[0]) ^ 0x3D);
 
-        u8 verificacao = 0xF8;
+        u8 checksum = 0xF8;
         for (int i = 0; i < kInputBlock; ++i)
-            verificacao ^= destination[i];
+            checksum ^= destination[i];
 
-        if (verificacaoGravada != verificacao) return -1;
+        if (storedChecksum != checksum) return -1;
         return (int)size;
     }
 

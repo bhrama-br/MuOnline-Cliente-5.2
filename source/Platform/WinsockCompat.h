@@ -140,14 +140,14 @@ inline int WSACleanup() { return 0; }
 #define FIONBIO 0x8004667E
 #endif
 
-inline int ioctlsocket(SOCKET s, long comando, unsigned long* argumento)
+inline int ioctlsocket(SOCKET s, long comando, unsigned long* arg)
 {
-    if (comando != (long)FIONBIO || argumento == 0) return SOCKET_ERROR;
+    if (comando != (long)FIONBIO || arg == 0) return SOCKET_ERROR;
 
     const int sinalizadores = fcntl(s, F_GETFL, 0);
     if (sinalizadores < 0) return SOCKET_ERROR;
 
-    const int novo = (*argumento != 0) ? (sinalizadores | O_NONBLOCK)
+    const int novo = (*arg != 0) ? (sinalizadores | O_NONBLOCK)
                                        : (sinalizadores & ~O_NONBLOCK);
     return (fcntl(s, F_SETFL, novo) < 0) ? SOCKET_ERROR : 0;
 }

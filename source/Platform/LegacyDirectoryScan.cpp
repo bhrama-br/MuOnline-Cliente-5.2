@@ -40,33 +40,33 @@ namespace
     {
         DIR* directory;
         char path[1024];   // diretorio ja resolvido, com barra no fim
-        char padrao[256];     // so a parte depois da ultima barra
+        char pattern[256];     // so a parte depois da ultima barra
     };
 
     // Casa `nome` com um padrao de curinga do Win32, ignorando a caixa.
     //
     // Recursivo no `*` de proposito: os padroes aqui tem no maximo um curinga
     // ("*.lua"), entao a simplicidade vale mais que uma versao iterativa.
-    bool Casa(const char* padrao, const char* nome)
+    bool Matches(const char* pattern, const char* name)
     {
-        if (*padrao == '\0') return *nome == '\0';
-        if (*padrao == '*')
+        if (*pattern == '\0') return *name == '\0';
+        if (*pattern == '*')
         {
             // Tenta consumir zero ou mais caracteres do nome.
-            for (const char* corte = nome; ; ++corte)
+            for (const char* cut = name; ; ++cut)
             {
-                if (Casa(padrao + 1, corte)) return true;
-                if (*corte == '\0') return false;
+                if (Matches(pattern + 1, cut)) return true;
+                if (*cut == '\0') return false;
             }
         }
-        if (*nome == '\0') return false;
-        if (*padrao != '?')
+        if (*name == '\0') return false;
+        if (*pattern != '?')
         {
-            const char a = (char)tolower((unsigned char)*padrao);
-            const char b = (char)tolower((unsigned char)*nome);
+            const char a = (char)tolower((unsigned char)*pattern);
+            const char b = (char)tolower((unsigned char)*name);
             if (a != b) return false;
         }
-        return Casa(padrao + 1, nome + 1);
+        return Matches(pattern + 1, name + 1);
     }
 
     bool EDirectoryName(const DirectoryScan& varredura, const struct dirent* entry)
@@ -95,7 +95,7 @@ namespace
         {
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
-            if (!Casa(varredura.padrao, entry->d_name)) continue;
+            if (!Matches(varredura.pattern, entry->d_name)) continue;
 
             const size_t size = strlen(entry->d_name);
             if (size + 1 > sizeof(data->cFileName)) continue;
@@ -108,16 +108,16 @@ namespace
     }
 }
 
-HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA data)
+HANDLE FindFirstFile(LPCSTR fullPattern, LPWIN32_FIND_DATA data)
 {
-    if (padraoCompleto == NULL || data == NULL) return INVALID_HANDLE_VALUE;
+    if (fullPattern == NULL || data == NULL) return INVALID_HANDLE_VALUE;
 
     char normalizado[1024];
-    Platform::NormalizeLegacyPath(padraoCompleto, normalizado, sizeof(normalizado));
+    Platform::NormalizeLegacyPath(fullPattern, normalizado, sizeof(normalizado));
 
     // Separa diretorio e padrao na ULTIMA barra. Sem barra, o diretorio e o corrente.
     char directory[1024];
-    const char* padrao = normalizado;
+    const char* pattern = normalizado;
     const char* lastSlash = strrchr(normalizado, '/');
     if (lastSlash != NULL)
     {
@@ -125,7 +125,7 @@ HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA data)
         if (size + 1 > sizeof(directory)) return INVALID_HANDLE_VALUE;
         memcpy(directory, normalizado, size);
         directory[size] = '\0';
-        padrao = lastSlash + 1;
+        pattern = lastSlash + 1;
     }
     else
     {
@@ -135,7 +135,7 @@ HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA data)
     }
 
     // `FindFirstFile("pasta\\")` sem padrao nenhum lista tudo, como no Win32.
-    if (*padrao == '\0') padrao = "*";
+    if (*pattern == '\0') pattern = "*";
 
     DIR* aberto = opendir(directory);
     if (aberto == NULL)
@@ -160,7 +160,7 @@ HANDLE FindFirstFile(LPCSTR padraoCompleto, LPWIN32_FIND_DATA data)
     DirectoryScan* varredura = new DirectoryScan();
     varredura->directory = aberto;
     snprintf(varredura->path, sizeof(varredura->path), "%s", directory);
-    snprintf(varredura->padrao, sizeof(varredura->padrao), "%s", padrao);
+    snprintf(varredura->pattern, sizeof(varredura->pattern), "%s", pattern);
 
     if (!NextEntry(*varredura, data))
     {

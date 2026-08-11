@@ -58,12 +58,12 @@ extern float BackTerrainHeight[256 * 256];
 static void* MuLegacyLogPump(void*)
 {
     char line[512];
-    ssize_t lidos;
-    size_t usado = 0;
-    while ((lidos = read(STDIN_FILENO, line + usado, sizeof(line) - usado - 1)) > 0)
+    ssize_t readCount;
+    size_t used = 0;
+    while ((readCount = read(STDIN_FILENO, line + used, sizeof(line) - used - 1)) > 0)
     {
-        usado += (size_t)lidos;
-        line[usado] = '\0';
+        used += (size_t)readCount;
+        line[used] = '\0';
 
         char* start = line;
         char* fim;
@@ -74,8 +74,8 @@ static void* MuLegacyLogPump(void*)
                 __android_log_print(ANDROID_LOG_INFO, "MuLegacyStdio", "%s", start);
             start = fim + 1;
         }
-        usado = strlen(start);
-        memmove(line, start, usado + 1);
+        used = strlen(start);
+        memmove(line, start, used + 1);
     }
     return 0;
 }
@@ -250,12 +250,12 @@ namespace
     // Se falhar -- tipicamente por os assets do cliente nao estarem no
     // dispositivo -- cai de volta no terreno de teste em vez de mostrar tela
     // preta. A degradacao e explicita e registrada.
-    bool g_cenaTentada = false;
-    bool g_cenaAtiva = false;
+    bool g_sceneRequested = false;
+    bool g_sceneActive = false;
 
-    void LogCena(const char* mensagem)
+    void LogScene(const char* message)
     {
-        __android_log_print(ANDROID_LOG_ERROR, "MuLegacy", "%s", mensagem);
+        __android_log_print(ANDROID_LOG_ERROR, "MuLegacy", "%s", message);
     }
 
     // Varios pontos do cliente chamam exit(0) quando um arquivo falta. No Web o
@@ -274,7 +274,7 @@ namespace
     // `static` locais criados DURANTE a carga registram seus destrutores depois
     // do meu gancho -- entao eles rodam primeiro, e um deles derruba o processo
     // tocando o GL apos o contexto morrer.
-    void RelatarArquivoAusente(const char* path)
+    void ReportMissingFile(const char* path)
     {
         __android_log_print(ANDROID_LOG_WARN, "MuLegacy", "ausente: %s", path);
     }
@@ -320,7 +320,7 @@ namespace
         return (size_t)info.uordblks;
     }
 
-    char g_arquivoAnterior[1024] = {0};
+    char g_previousFile[1024] = {0};
     size_t g_bytesNaAbertura = 0;
     size_t g_picoBytes = 0;
     FILE* g_rastro = NULL;
@@ -335,7 +335,7 @@ namespace
     //
     // O chmod existe porque arquivo criado pelo app nao e legivel pelo shell, e
     // `adb shell tail` e justamente como ele vai ser lido.
-    void AbrirRastroDeMemoria()
+    void OpenMemoryTrace()
     {
         const char* raiz = getenv("MU_DATA_ROOT");
         if (raiz == NULL || raiz[0] == '\0') return;
@@ -355,18 +355,18 @@ namespace
         fflush(g_rastro);
     }
 
-    void MedirArquivoAberto(const char* path)
+    void MeasureOpenedFile(const char* path)
     {
         const size_t now = BytesEmUso();
 
-        if (g_arquivoAnterior[0] != '\0' && now > g_bytesNaAbertura)
+        if (g_previousFile[0] != '\0' && now > g_bytesNaAbertura)
         {
             const size_t custo = now - g_bytesNaAbertura;
             if (custo >= kLimiarRelato)
             {
                 __android_log_print(ANDROID_LOG_WARN, "MuLegacy",
                     "memoria: %s custou %.1f MB (total %.1f MB)",
-                    g_arquivoAnterior, custo / (1024.0 * 1024.0),
+                    g_previousFile, custo / (1024.0 * 1024.0),
                     now / (1024.0 * 1024.0));
             }
         }
@@ -395,8 +395,8 @@ namespace
             fflush(g_rastro);   // sem isto o buffer morre com o processo
         }
 
-        strncpy(g_arquivoAnterior, path, sizeof(g_arquivoAnterior) - 1);
-        g_arquivoAnterior[sizeof(g_arquivoAnterior) - 1] = '\0';
+        strncpy(g_previousFile, path, sizeof(g_previousFile) - 1);
+        g_previousFile[sizeof(g_previousFile) - 1] = '\0';
         g_bytesNaAbertura = now;
     }
 
@@ -406,7 +406,7 @@ namespace
     // destrutores estaticos. Foi o que resolveu depois de duas tentativas que nao
     // servem -- `atexit` (roda em ordem inversa, os destrutores vem primeiro) e ler
     // o logcat (o SIGSEGV/abort aparece longe da causa).
-    void RelatarTerminacao()
+    void ReportTermination()
     {
         __android_log_print(ANDROID_LOG_ERROR, "MuLegacy",
             "TERMINATE: excecao nao tratada. Ultimo arquivo aberto: %s",
@@ -428,56 +428,56 @@ namespace
     // inalcancavel, e as etapas ja vinham separadas em LegacySceneBringup. O que
     // fecha o buraco de verdade e a espera limitada em superficiePerdida, do lado
     // Java: sem ela, qualquer etapa longa volta a travar a UI.
-    enum EtapaSubida
+    enum BringupStage
     {
-        ETAPA_TITULO = 0,
-        ETAPA_DADOS_BASICOS,
-        ETAPA_INTERFACE,
-        ETAPA_LOGIN,
-        ETAPA_CONCLUIDA
+        STAGE_TITLE = 0,
+        STAGE_BASIC_DATA,
+        STAGE_INTERFACE,
+        STAGE_LOGIN,
+        STAGE_DONE
     };
-    EtapaSubida g_etapaSubida = ETAPA_TITULO;
+    BringupStage g_bringupStage = STAGE_TITLE;
 
-    void AvancarSubidaDeCena(int width, int height)
+    void AdvanceSceneBringup(int width, int height)
     {
-        switch (g_etapaSubida)
+        switch (g_bringupStage)
         {
-        case ETAPA_TITULO:
-            Platform::SetLegacySceneLogger(&LogCena);
-            Platform::SetLegacyFileMissHook(&RelatarArquivoAusente);
-            AbrirRastroDeMemoria();
-            Platform::SetLegacyFileOpenHook(&MedirArquivoAberto);
-            std::set_terminate(&RelatarTerminacao);
+        case STAGE_TITLE:
+            Platform::SetLegacySceneLogger(&LogScene);
+            Platform::SetLegacyFileMissHook(&ReportMissingFile);
+            OpenMemoryTrace();
+            Platform::SetLegacyFileOpenHook(&MeasureOpenedFile);
+            std::set_terminate(&ReportTermination);
 
             if (!Platform::CreateTitleScene(width, height))
             {
                 __android_log_print(ANDROID_LOG_WARN, "MuLegacy",
                     "cena do cliente indisponivel (assets?); seguindo com o terreno de teste");
-                g_cenaTentada = true;   // nao insiste a cada quadro
-                g_etapaSubida = ETAPA_CONCLUIDA;
+                g_sceneRequested = true;   // nao insiste a cada quadro
+                g_bringupStage = STAGE_DONE;
                 return;
             }
-            g_etapaSubida = ETAPA_DADOS_BASICOS;
+            g_bringupStage = STAGE_BASIC_DATA;
             return;
 
-        case ETAPA_DADOS_BASICOS:
+        case STAGE_BASIC_DATA:
             Platform::LoadBasicData();
-            g_etapaSubida = ETAPA_INTERFACE;
+            g_bringupStage = STAGE_INTERFACE;
             return;
 
-        case ETAPA_INTERFACE:
-            Platform::CarregarInterfacePrincipal();
-            g_etapaSubida = ETAPA_LOGIN;
+        case STAGE_INTERFACE:
+            Platform::LoadMainInterface();
+            g_bringupStage = STAGE_LOGIN;
             return;
 
-        case ETAPA_LOGIN:
-            Platform::EntrarNaCenaDeLogin();
-            g_cenaTentada = true;
-            g_cenaAtiva = true;
-            g_etapaSubida = ETAPA_CONCLUIDA;
+        case STAGE_LOGIN:
+            Platform::EnterLoginScene();
+            g_sceneRequested = true;
+            g_sceneActive = true;
+            g_bringupStage = STAGE_DONE;
             return;
 
-        case ETAPA_CONCLUIDA:
+        case STAGE_DONE:
             return;
         }
     }
@@ -490,14 +490,14 @@ namespace
 
         if (g_display == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
 
-        if (!g_cenaTentada && width > 0 && height > 0)
+        if (!g_sceneRequested && width > 0 && height > 0)
         {
             // Uma etapa por quadro: ver o comentario em AvancarSubidaDeCena.
-            AvancarSubidaDeCena(width, height);
-            if (!g_cenaAtiva) return;   // ainda subindo; desenha no proximo quadro
+            AdvanceSceneBringup(width, height);
+            if (!g_sceneActive) return;   // ainda subindo; desenha no proximo quadro
         }
 
-        if (g_cenaAtiva)
+        if (g_sceneActive)
         {
             // Mesma orquestracao do Web: Platform/LegacySceneBringup.cpp.
             Platform::DrawLegacyFrame(width, height);

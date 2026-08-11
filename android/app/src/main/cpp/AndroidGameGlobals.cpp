@@ -64,18 +64,3 @@ void CErrorReport::WriteCurrentTime(BOOL)
 {
     // O logcat ja carimba a hora de cada linha; repetir aqui so poluiria.
 }
-
-void CErrorReport::HexWrite(void* pBuffer, int iSize)
-{
-    if (pBuffer == NULL || iSize <= 0) return;
-    const unsigned char* bytes = (const unsigned char*)pBuffer;
-    // 16 bytes por linha, como o dump original.
-    char line[80];
-    for (int offset = 0; offset < iSize; offset += 16)
-    {
-        int used = 0;
-        for (int i = 0; i < 16 && offset + i < iSize; ++i)
-            used += snprintf(line + used, sizeof(line) - (size_t)used, "%02X ", bytes[offset + i]);
-        __android_log_print(ANDROID_LOG_ERROR, "MuLegacy", "%04X: %s", offset, line);
-    }
-}

@@ -1558,6 +1558,27 @@ void SEASON3B::CNewUIInventoryCtrl::SetEventState(EVENT_STATE es)
 
 void SEASON3B::CNewUIInventoryCtrl::Render3D()
 {
+	// DIAGNOSTICO TEMPORARIO (arma/set invisivel no inventario ate outro item ser
+	// pego, 2026-08-11). Separa as duas explicacoes possiveis, que exigem correcoes
+	// diferentes: se o item invisivel NAO esta nesta lista, o defeito e na insercao;
+	// se esta, ele e desenhado e o defeito e no desenho. Uma linha a cada ~2 s.
+	// Remover junto com o [item3d] de ZzzInventory.cpp.
+#if defined(__EMSCRIPTEN__)
+	{
+		static int callCount = 0;
+		if ((callCount++ % 120) == 0)
+		{
+			char line[320];
+			int used = snprintf(line, sizeof(line), "[inv3d] itens=%d tipos:",
+			                     (int)m_vecItem.size());
+			for (size_t k = 0; k < m_vecItem.size() && used < (int)sizeof(line) - 24; ++k)
+				used += snprintf(line + used, sizeof(line) - used, " %d(x%d,y%d)",
+				                  (int)m_vecItem[k]->Type,
+				                  (int)m_vecItem[k]->x, (int)m_vecItem[k]->y);
+			fprintf(stderr, "%s\n", line);
+		}
+	}
+#endif
 	type_vec_item::iterator li = m_vecItem.begin();
 	for(; li != m_vecItem.end(); li++)
 	{

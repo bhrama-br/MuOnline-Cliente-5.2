@@ -50,8 +50,8 @@ namespace
             var key = sock.daddr + ":" + sock.dport;
             var peer = sock.peers ? sock.peers[key] : undefined;
             if (!peer || !peer.socket) return -1;
-            var estado = peer.socket.readyState;
-            if (estado === 2 || estado === 3) return -1;   // CLOSING ou CLOSED
+            var state = peer.socket.readyState;
+            if (state === 2 || state === 3) return -1;   // CLOSING ou CLOSED
             return 0;
         }, fd);
     }

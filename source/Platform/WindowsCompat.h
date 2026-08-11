@@ -433,11 +433,11 @@ inline HRESULT StringCchCopyA(char* destination, size_t capacidade, const char* 
     return (source[i] == '\0') ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
 
-inline HRESULT StringCchLengthA(const char* texto, size_t capacidade, size_t* size)
+inline HRESULT StringCchLengthA(const char* text, size_t capacidade, size_t* size)
 {
-    if (texto == NULL) return STRSAFE_E_INSUFFICIENT_BUFFER;
+    if (text == NULL) return STRSAFE_E_INSUFFICIENT_BUFFER;
     size_t i = 0;
-    while (i < capacidade && texto[i] != '\0') ++i;
+    while (i < capacidade && text[i] != '\0') ++i;
     if (size != NULL) *size = i;
     return (i < capacidade) ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
@@ -451,10 +451,10 @@ inline HRESULT StringCchLengthA(const char* texto, size_t capacidade, size_t* si
 // argumentos e a mesma, mas o nome aparece em contextos onde a macro
 // atrapalharia a leitura. Inline mantem a assinatura explicita.
 inline HRESULT StringCchVPrintfA(char* destination, size_t capacidade,
-                                 const char* formato, va_list argumentos)
+                                 const char* format, va_list args)
 {
     if (destination == NULL || capacidade == 0) return STRSAFE_E_INSUFFICIENT_BUFFER;
-    const int escritos = vsnprintf(destination, capacidade, formato, argumentos);
+    const int escritos = vsnprintf(destination, capacidade, format, args);
     return (escritos >= 0 && (size_t)escritos < capacidade)
          ? 0 : STRSAFE_E_INSUFFICIENT_BUFFER;
 }
@@ -507,13 +507,13 @@ inline BOOL DeleteFileA(const char* path)
 typedef unsigned int (*PlatformThreadRoutine)(void*);
 
 inline uintptr_t _beginthreadex(void* /*seguranca*/, unsigned /*pilha*/,
-                                unsigned int (*rotina)(void*), void* argumento,
+                                unsigned int (*rotina)(void*), void* arg,
                                 unsigned /*criacao*/, unsigned* idThread)
 {
     PLATFORM_STUB_ONCE("_beginthreadex (executando de forma sincrona)");
     if (idThread != NULL) *idThread = 0;
     if (rotina == NULL) return 0;
-    rotina(argumento);
+    rotina(arg);
     // Handle nao-nulo: o chamador compara com INVALID_HANDLE_VALUE.
     return (uintptr_t)1;
 }
@@ -837,8 +837,8 @@ inline BOOL SwapBuffers(HDC)
 // sintetico de Platform/PlatformEditControl.cpp. Para qualquer outro handle (a
 // janela principal) continuam sendo no-op -- o encerramento e o redimensionamento
 // passam por Platform::IWindow.
-LRESULT SendMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
-BOOL PostMessage(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+LRESULT SendMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL PostMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 inline void PostQuitMessage(int) {}
 
 // Empacotamento de versao usado pelo WinSock (WSAStartup).
@@ -960,8 +960,8 @@ LONG SetWindowLongW(HWND window, int index, LONG value);
 LONG SetWindowLongA(HWND window, int index, LONG value);
 LONG GetWindowLongW(HWND window, int index);
 LONG GetWindowLongA(HWND window, int index);
-LRESULT CallWindowProcW(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
-LRESULT CallWindowProcA(WNDPROC proc, HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+LRESULT CallWindowProcW(WNDPROC proc, HWND window, UINT message, WPARAM wParam, LPARAM lParam);
+LRESULT CallWindowProcA(WNDPROC proc, HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 
 // Estilos e mensagens do controle EDIT nativo, usados por CUITextInputBox::Init.
 // Os valores sao os do SDK; sem CreateWindowW real nenhum deles tem efeito, mas
@@ -1024,23 +1024,23 @@ typedef struct tagCOMPOSITIONFORM
 
 // Todas implementadas em Platform/PlatformEditControl.cpp. CreateWindowW so conhece
 // a classe "edit"; qualquer outra continua devolvendo NULL.
-HWND CreateWindowW(LPCWSTR classe, LPCWSTR texto, DWORD estilo, int x, int y,
+HWND CreateWindowW(LPCWSTR classe, LPCWSTR text, DWORD estilo, int x, int y,
                    int width, int height, HWND pai, HMENU menu, HINSTANCE instancia,
                    LPVOID parametro);
 BOOL ShowWindow(HWND window, int comando);
 BOOL SetWindowPos(HWND window, HWND depoisDe, int x, int y, int width, int height, UINT sinalizadores);
-LRESULT SendMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+LRESULT SendMessageW(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 int  GetWindowText(HWND window, LPSTR destination, int size);
 int  GetWindowTextA(HWND window, LPSTR destination, int size);
 int  GetWindowTextW(HWND window, LPWSTR destination, int size);
-BOOL SetWindowTextW(HWND window, LPCWSTR texto);
-BOOL SetWindowTextA(HWND window, LPCSTR texto);
+BOOL SetWindowTextW(HWND window, LPCWSTR text);
+BOOL SetWindowTextA(HWND window, LPCSTR text);
 BOOL GetCaretPos(LPPOINT ponto);
 inline HDC GetDC(HWND) { return NULL; }
 inline int ReleaseDC(HWND, HDC) { return 0; }
 BOOL IsWindowVisible(HWND window);
-BOOL PostMessageW(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
-BOOL PostMessageA(HWND window, UINT mensagem, WPARAM wParam, LPARAM lParam);
+BOOL PostMessageW(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL PostMessageA(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 int  GetScrollPos(HWND window, int barra);
 int  SetScrollPos(HWND window, int barra, int position, BOOL redraw);
 // TODO(Platform): temporizador do Win32. O loop de quadro ja tem relogio proprio
@@ -1374,7 +1374,7 @@ typedef struct
 #ifndef INVALID_HANDLE_VALUE
 #define INVALID_HANDLE_VALUE ((HANDLE)-1)
 #endif
-HANDLE FindFirstFile(LPCSTR padrao, LPWIN32_FIND_DATA data);
+HANDLE FindFirstFile(LPCSTR pattern, LPWIN32_FIND_DATA data);
 BOOL   FindNextFile(HANDLE handle, LPWIN32_FIND_DATA data);
 BOOL   FindClose(HANDLE handle);
 #ifndef FILE_ATTRIBUTE_DIRECTORY

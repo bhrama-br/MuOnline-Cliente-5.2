@@ -55,18 +55,18 @@ namespace
     int  g_currentWidth = 0;
     int  g_currentHeight  = 0;
 
-    void Log(const char* mensagem)
+    void Log(const char* message)
     {
-        if (g_logger != 0 && mensagem != 0) g_logger(mensagem);
+        if (g_logger != 0 && message != 0) g_logger(message);
     }
 
-    void Logf(const char* formato, ...)
+    void Logf(const char* format, ...)
     {
         if (g_logger == 0) return;
         char line[320];
         va_list args;
-        va_start(args, formato);
-        vsnprintf(line, sizeof(line), formato, args);
+        va_start(args, format);
+        vsnprintf(line, sizeof(line), format, args);
         va_end(args);
         g_logger(line);
     }
@@ -96,11 +96,11 @@ namespace
         const int previousY = MouseY;
 
         // WM_MOUSEMOVE (Winmain.cpp:778-793).
-        const float taxa = (g_fScreenRate_y != 0.0f) ? g_fScreenRate_y : 1.0f;
-        const int limitX = (int)(WindowWidth / taxa);
+        const float rate = (g_fScreenRate_y != 0.0f) ? g_fScreenRate_y : 1.0f;
+        const int limitX = (int)(WindowWidth / rate);
         const int limitY = (int)GetWindowsY;
-        int x = (int)((float)pointer.x / taxa);
-        int y = (int)((float)pointer.y / taxa);
+        int x = (int)((float)pointer.x / rate);
+        int y = (int)((float)pointer.y / rate);
         if (x < 0) x = 0;
         if (x > limitX) x = limitX;
         if (y < 0) y = 0;
@@ -160,7 +160,7 @@ namespace
     // ficam com o tamanho PADRAO da area de desenho -- e BeginBitmap chama
     // glViewport(0,0,WindowWidth,WindowHeight), entao a interface inteira sai
     // espremida num retangulo no canto.
-    void AplicarResolucao(int width, int height)
+    void ApplyResolution(int width, int height)
     {
         WindowWidth  = (unsigned int)width;
         WindowHeight = (unsigned int)height;
@@ -220,7 +220,20 @@ namespace
         // gCreateFont.SetFont, que e quem preenche g_hFont e as variantes. Sem
         // isso os handles ficam nulos e NENHUM texto do jogo aparece. Fica aqui,
         // e nao numa inicializacao unica, porque depende da resolucao.
-        const int fontHeight = (int)ceilf(12.f + ((float)height - 480.f) / 200.f);
+        // FontHeight e um GLOBAL do cliente (ZzzInterface.cpp:136), nao uma variavel
+        // local: varias janelas derivam altura de linha dele. Ele so era escrito no
+        // Winmain (1772), entao fora do PC ficava em ZERO e todo leitor recebia 0:
+        //
+        //   NewUIMoveCommandWindow.cpp:137  altura de linha = 0/rate + 2 = 2
+        //     -> a janela de Move desenhava todas as linhas empilhadas em 2 pixels,
+        //        que e o texto embolado relatado no Web.
+        //   NewUICharacterInfoWindow.cpp:222, PersonalShopTitleImp.cpp:542/607-617,
+        //   ZzzInterface.cpp:779, LuaGlobal.cpp:80  -> alturas zeradas.
+        //
+        // A expressao e a MESMA do Winmain, de proposito: as duas plataformas tem de
+        // derivar o mesmo tamanho da mesma altura de tela.
+        FontHeight = (int)ceilf(12.f + ((float)height - 480.f) / 200.f);
+        const int fontHeight = FontHeight;
         const int fixedHeight  = (height <= 600) ? 14 : 15;
         gCreateFont.SetFont(fontHeight - 1, fontHeight, fixedHeight - 1, fixedHeight);
 
@@ -272,7 +285,7 @@ namespace Platform
         g_logger = logger;
     }
 
-    bool CenaDeTituloPronta()
+    bool IsTitleSceneReady()
     {
         return g_titleReady;
     }
@@ -307,13 +320,13 @@ namespace Platform
         // NULO e o primeiro uso quebrava dentro de OpenPlayers, em
         // AngleMatrix(m_oOwner->Angle) -- endereco 0x4d8, que e o offset de Angle
         // a partir do zero. E idempotente.
-        AlocarGlobaisDoCliente();
+        AllocateClientGlobals();
 
         // ANTES de AplicarResolucao: e ela que chama gCreateFont.SetFont, e as faces
         // que SetFont usa vem de Font.lua, carregado por gCreateFont.Init() aqui.
         InicializarSubsistemasDeScript();
 
-        AplicarResolucao(screenWidth, screenHeight);
+        ApplyResolution(screenWidth, screenHeight);
 
         // As duas primeiras linhas de WebzenScene. OpenFont carrega as texturas
         // de fonte e cria o renderizador de texto.
@@ -368,7 +381,7 @@ namespace Platform
         return true;
     }
 
-    bool CarregarInterfacePrincipal()
+    bool LoadMainInterface()
     {
         if (!g_titleReady) return false;
 
@@ -379,7 +392,7 @@ namespace Platform
         return ok;
     }
 
-    bool EntrarNaCenaDeLogin()
+    bool EnterLoginScene()
     {
         if (!g_titleReady) return false;
 
@@ -426,7 +439,7 @@ namespace Platform
         if (screenWidth > 0 && screenHeight > 0 &&
             (screenWidth != g_currentWidth || screenHeight != g_currentHeight))
         {
-            AplicarResolucao(screenWidth, screenHeight);
+            ApplyResolution(screenWidth, screenHeight);
 
             // A UI de titulo assa a escala nos sprites, entao so ela e remontada,
             // e so enquanto ainda estivermos nela.

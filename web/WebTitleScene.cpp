@@ -12,12 +12,12 @@
 
 namespace
 {
-    void LogWeb(const char* mensagem)
+    void LogWeb(const char* message)
     {
-        emscripten_log(EM_LOG_ERROR, "%s", mensagem);
+        emscripten_log(EM_LOG_ERROR, "%s", message);
     }
 
-    void TamanhoDoCanvas(int& width, int& height)
+    void GetCanvasSize(int& width, int& height)
     {
         width = 0;
         height = 0;
@@ -35,7 +35,7 @@ namespace Platform
 
     bool IsLegacyTitleSceneReady()
     {
-        return CenaDeTituloPronta();
+        return IsTitleSceneReady();
     }
 
     void RenderLegacyTitleScene()
@@ -44,7 +44,7 @@ namespace Platform
         // quando a janela e redimensionada -- por isso e consultado a cada quadro
         // em vez de uma vez na inicializacao.
         int width = 0, height = 0;
-        TamanhoDoCanvas(width, height);
+        GetCanvasSize(width, height);
         DrawLegacyFrame(width, height);
     }
 }

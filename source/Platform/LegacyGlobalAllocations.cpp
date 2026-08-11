@@ -38,7 +38,7 @@
 #include "../_GlobalFunctions.h"
 #include "../MultiLanguage.h"
 #include "../ZzzOpenData.h"   // extern g_strSelectedML
-#include "LegacySceneBringup.h"   // CarregarMainInfo
+#include "LegacySceneBringup.h"   // LoadMainInfo
 #include "../UIWindows.h"         // CChatRoomSocketList
 #include "../UIManager.h"         // CUIManager
 #include "../UIMapName.h"         // CUIMapName
@@ -62,7 +62,7 @@ extern CSimpleModulus g_SimpleModulusSC;
 
 namespace Platform
 {
-    void AlocarGlobaisDoCliente()
+    void AllocateClientGlobals()
     {
         // Idempotente: chamar duas vezes nao vaza nem realoca.
         if (GateAttribute != NULL) return;
@@ -126,7 +126,7 @@ namespace Platform
         // Endereco do servidor e demais campos do arquivo principal. Depois do
         // CMultiLanguage porque nada aqui depende da ordem, e antes de qualquer
         // tentativa de conexao -- que so acontece na cena de login.
-        CarregarMainInfo();
+        LoadMainInfo();
 
         // Os tres objetos que o Winmain cria em 1786-1788. Eu havia assumido que os
         // usos testavam o ponteiro; NAO testam.

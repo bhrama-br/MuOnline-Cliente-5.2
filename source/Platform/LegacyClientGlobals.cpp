@@ -31,7 +31,7 @@
 #include "../ZzzScene.h"          // szServerIpAddress, g_ServerPort
 #include "../CrowdLod.h"          // secao [Render] do MainInfo.ini
 #include "LegacyFileAccess.h"
-#include "LegacySceneBringup.h"   // declara CarregarMainInfo
+#include "LegacySceneBringup.h"   // declara LoadMainInfo
 #include "../wsclientinline.h"    // SendCheck, usado por CheckHack
 
 HWND g_hWnd = NULL;
@@ -64,8 +64,8 @@ namespace
         CProtect* protecao = reinterpret_cast<CProtect*>(g_armazenamentoProtect);
         // 5 especificadores, na ordem que UpdateSceneState passa:
         // mes, dia, hora, minuto, contador. Cabe nos 50 bytes do campo.
-        const char* padrao = "ScreenShots/Screen(%02d-%02d-%02d-%02d)-%03d.jpg";
-        strncpy(protecao->m_MainInfo.ScreenShotPath, padrao,
+        const char* pattern = "ScreenShots/Screen(%02d-%02d-%02d-%02d)-%03d.jpg";
+        strncpy(protecao->m_MainInfo.ScreenShotPath, pattern,
                 sizeof(protecao->m_MainInfo.ScreenShotPath) - 1);
         return protecao;
     }
@@ -85,23 +85,23 @@ namespace
 
     // Corta espacos e tabulacoes das duas pontas. O MainInfo.ini usa tabulacoes
     // para alinhar os valores, entao sem isto o IP viria com tabulacao no meio.
-    std::string Aparar(const std::string& texto)
+    std::string Aparar(const std::string& text)
     {
         size_t start = 0;
-        while (start < texto.size() && (texto[start] == ' ' || texto[start] == '\t' ||
-                                         texto[start] == '\r' || texto[start] == '\n'))
+        while (start < text.size() && (text[start] == ' ' || text[start] == '\t' ||
+                                         text[start] == '\r' || text[start] == '\n'))
             ++start;
-        size_t fim = texto.size();
-        while (fim > start && (texto[fim - 1] == ' ' || texto[fim - 1] == '\t' ||
-                               texto[fim - 1] == '\r' || texto[fim - 1] == '\n'))
+        size_t fim = text.size();
+        while (fim > start && (text[fim - 1] == ' ' || text[fim - 1] == '\t' ||
+                               text[fim - 1] == '\r' || text[fim - 1] == '\n'))
             --fim;
-        return texto.substr(start, fim - start);
+        return text.substr(start, fim - start);
     }
 }
 
 namespace Platform
 {
-    void CarregarMainInfo()
+    void LoadMainInfo()
     {
         // Lista de personagens da Season 13 e o PADRAO deste projeto: e o que o
         // MainInfo.ini do servidor e o do Web dizem, e e o caminho que a UI deve usar.
@@ -125,14 +125,14 @@ namespace Platform
         char line[512];
         while (fgets(line, sizeof(line), file) != NULL)
         {
-            std::string texto = Aparar(line);
-            if (texto.empty() || texto[0] == ';' || texto[0] == '[') continue;
+            std::string text = Aparar(line);
+            if (text.empty() || text[0] == ';' || text[0] == '[') continue;
 
-            const size_t igual = texto.find('=');
+            const size_t igual = text.find('=');
             if (igual == std::string::npos) continue;
 
-            const std::string key = Aparar(texto.substr(0, igual));
-            const std::string value = Aparar(texto.substr(igual + 1));
+            const std::string key = Aparar(text.substr(0, igual));
+            const std::string value = Aparar(text.substr(igual + 1));
 
             if      (key == "IpAddress")        CopiarCampo(gProtect->m_MainInfo.IpAddress, sizeof(gProtect->m_MainInfo.IpAddress), value);
             else if (key == "IpAddressPort")    gProtect->m_MainInfo.IpAddressPort = (WORD)atoi(value.c_str());
@@ -341,12 +341,12 @@ namespace
         const DWORD dwKey = (DWORD)key;
         DWORD resultado = dwKey << 9;
         if (size < 4) return resultado;
-        for (DWORD lidos = 0; lidos <= size - 4; lidos += 4)
+        for (DWORD readCount = 0; readCount <= size - 4; readCount += 4)
         {
             DWORD value;
-            memcpy(&value, buffer + lidos, sizeof(DWORD));
+            memcpy(&value, buffer + readCount, sizeof(DWORD));
 
-            switch ((lidos / 4 + key) % 3)
+            switch ((readCount / 4 + key) % 3)
             {
             case 0: resultado ^= value; break;
             case 1: resultado += value; break;
@@ -354,8 +354,8 @@ namespace
             }
 
             // Sempre verdadeiro, ja que o passo e 4; preservado como no original.
-            if (0 == (lidos % 4))
-                resultado ^= ((dwKey + resultado) >> ((lidos / 4) % 16 + 3));
+            if (0 == (readCount % 4))
+                resultado ^= ((dwKey + resultado) >> ((readCount / 4) % 16 + 3));
         }
         return resultado;
     }
@@ -373,12 +373,12 @@ DWORD GetCheckSum(WORD wKey)
     fseek(file, 0, SEEK_SET);
     if (size <= 0) { fclose(file); return 0; }
 
-    BYTE* conteudo = new BYTE[(size_t)size];
-    const size_t lidos = fread(conteudo, 1, (size_t)size, file);
+    BYTE* content = new BYTE[(size_t)size];
+    const size_t readCount = fread(content, 1, (size_t)size, file);
     fclose(file);
 
-    const DWORD sum = GenerateChecksum(conteudo, (DWORD)lidos, wKey);
-    delete [] conteudo;
+    const DWORD sum = GenerateChecksum(content, (DWORD)readCount, wKey);
+    delete [] content;
     return sum;
 }
 

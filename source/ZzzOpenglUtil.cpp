@@ -483,13 +483,13 @@ void BindTexture(int tex)
 	// chamada com o MESMO indice era descartada pelo cache e o adapter continuava
 	// com a textura anterior. O sintoma era geometria do mundo desenhada sem
 	// textura (ceu cinza plano, cena lavada), sem erro de GL nenhum.
-	const unsigned int nome = (tex >= 0)
+	const unsigned int textureName = (tex >= 0)
 		? Bitmaps[tex].TextureNumber
 		: static_cast<unsigned int>(-1 * tex);
 
 	if (Platform::IsGlslLegacyBackendEnabled())
 	{
-		Platform::GetLegacyRenderAdapter().BindTexture(nome);
+		Platform::GetLegacyRenderAdapter().BindTexture(textureName);
 		CachTexture = tex;
 		return;
 	}
@@ -500,7 +500,7 @@ void BindTexture(int tex)
 	// entao chamá-lo sempre anularia o cache e acrescentaria uma chamada GL por
 	// bind no caminho quente de render. No backend GLSL a chamada e apenas
 	// guardar um inteiro, entao e barata.
-	Platform::GetLegacyRenderAdapter().BindTexture(nome);
+	Platform::GetLegacyRenderAdapter().BindTexture(textureName);
 #endif
 
 	if(CachTexture != tex)
@@ -510,10 +510,10 @@ void BindTexture(int tex)
 		// pendentes ja com a textura do proximo botao/campo da UI.
 		Platform::FlushLegacyRenderBatch();
       	CachTexture = tex;
-		glBindTexture(GL_TEXTURE_2D, nome);
+		glBindTexture(GL_TEXTURE_2D, textureName);
 		Platform::InvalidateLegacyRenderStateCache();
 #if defined(_WIN32)
-		Platform::GetLegacyRenderAdapter().BindTexture(nome);
+		Platform::GetLegacyRenderAdapter().BindTexture(textureName);
 #endif
 	}
 }
