@@ -296,6 +296,22 @@ int main()
     emscripten_webgl_init_context_attributes(&attributes);
     attributes.majorVersion = 2;
     attributes.minorVersion = 0;
+    // Os defaults do Emscripten nao servem para um cliente de jogo, e nenhum deles
+    // havia sido escolhido: o contexto vinha com alpha, MSAA 4x e sem stencil.
+    //
+    // antialias: o cliente do PC nao tem MSAA, entao ligado aqui ele so paga o
+    // resolve do buffer multiamostrado em cada apresentacao.
+    attributes.antialias = EM_FALSE;
+    // alpha: um canvas translucido obriga o compositor a mesclar a pagina inteira
+    // atras dele a cada quadro. O jogo cobre 100% da area util.
+    attributes.alpha = EM_FALSE;
+    attributes.premultipliedAlpha = EM_FALSE;
+    // stencil: o jogo CHAMA glEnable(GL_STENCIL_TEST) (~24 vezes por quadro, medido).
+    // Sem plano de stencil no framebuffer padrao esses efeitos eram descartados em
+    // silencio -- isto e correcao, nao desempenho.
+    attributes.stencil = EM_TRUE;
+    attributes.depth = EM_TRUE;
+    attributes.powerPreference = EM_WEBGL_POWER_PREFERENCE_HIGH_PERFORMANCE;
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = emscripten_webgl_create_context("#canvas", &attributes);
     if (context <= 0 || emscripten_webgl_make_context_current(context) != EMSCRIPTEN_RESULT_SUCCESS)
         return 1;

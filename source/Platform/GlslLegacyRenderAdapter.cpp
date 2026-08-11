@@ -394,6 +394,7 @@ namespace
             m_drawVertices.reserve(8192);
             m_boneRows.reserve(200 * 12);
             m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
+            EsquecerEstadoDeObjetos();
             SetIdentity(m_projection);
             SetIdentity(m_modelView);
             SetColor(1.f, 1.f, 1.f, 1.f);
@@ -443,6 +444,46 @@ namespace
             m_boneScaleSent = -1e30f;
             m_textureUnitSent = false;
             m_instancedSent = -1;
+        }
+
+        // Espelho dos tres estados de OBJETO que so este adaptador manipula --
+        // conferido por varredura: nenhum glActiveTexture, glBindBufferBase ou
+        // glBindBuffer(GL_UNIFORM_BUFFER) existe fora deste arquivo. Por isso o
+        // espelho pode ser incondicional, sem depender do batching: nada muda esse
+        // estado pelas costas.
+        //
+        // Medido no jogo (Lorencia, contagem por quadro pelo lado do JS):
+        // glActiveTexture 927 chamadas, 99% repetindo a unidade que ja estava ativa;
+        // glBindBufferBase 388, 46% repetindo; glBindBuffer 644, 66% repetindo.
+        // Sao chamadas que atravessam para o processo de GPU e sao validadas la.
+        void AtivarUnidadeDeTextura(GLenum unidade)
+        {
+            if (m_unidadeTexturaAtiva == unidade) { ++m_frameStats.uniformCallsSaved; return; }
+            glActiveTexture(unidade);
+            m_unidadeTexturaAtiva = unidade;
+        }
+        void LigarUniformBuffer(GLuint buffer)
+        {
+            if (m_uniformBufferLigado == buffer) { ++m_frameStats.uniformCallsSaved; return; }
+            glBindBuffer(GL_UNIFORM_BUFFER, buffer);
+            m_uniformBufferLigado = buffer;
+        }
+        void LigarPaletaNoBinding0(GLuint buffer)
+        {
+            if (m_uniformBufferBase0 == buffer) { ++m_frameStats.uniformCallsSaved; return; }
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer);
+            m_uniformBufferBase0 = buffer;
+            // glBindBufferBase liga TAMBEM o ponto generico do target; sem refletir
+            // isso o espelho de LigarUniformBuffer passaria a mentir.
+            m_uniformBufferLigado = buffer;
+        }
+        void EsquecerEstadoDeObjetos()
+        {
+            // Sentinela impossivel: 0 e um binding valido (desligado), entao nao
+            // serve para dizer "nao sei".
+            m_unidadeTexturaAtiva = 0xFFFFFFFFu;
+            m_uniformBufferLigado = 0xFFFFFFFFu;
+            m_uniformBufferBase0 = 0xFFFFFFFFu;
         }
 
         // Setters com espelho. Devolvem sem tocar no GL quando o valor ja esta la;
@@ -655,7 +696,7 @@ namespace
 
             if (!m_textureSentKnown || m_textureSent != m_texture)
             {
-                glActiveTexture(GL_TEXTURE0);
+                AtivarUnidadeDeTextura(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 m_textureSent = m_texture;
                 m_textureSentKnown = true;
@@ -690,7 +731,7 @@ namespace
                 m_vaoActive = true;
             }
             const GLsizeiptr uploadBytes = static_cast<GLsizeiptr>(drawVertexCount * sizeof(LegacyVertex));
-            EnsureVertexBufferCapacity(uploadBytes);
+            GarantirCapacidadeDeVertices(uploadBytes);
             glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBytes, drawVertexData);
             ++m_frameStats.bufferSubDataCalls;
             if (indexedQuads)
@@ -910,6 +951,7 @@ namespace
             m_vertexArray = 0;
             m_boneBuffer = 0;
             m_boneBuffers[0] = m_boneBuffers[1] = m_boneBuffers[2] = 0;
+            EsquecerEstadoDeObjetos();
             m_boneBufferIndex = 0;
             m_projectionLocation = -1;
             m_modelViewLocation = -1;
@@ -993,7 +1035,7 @@ namespace
                 if (m_bonePaletteTexture == 0) { m_instancingUnavailable = true; return false; }
                 m_bonePaletteWidth = 0;
                 m_bonePaletteHeight = 0;
-                glActiveTexture(GL_TEXTURE1);
+                AtivarUnidadeDeTextura(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
                 // texelFetch nao filtra, mas GL exige filtro completo para a
                 // textura ser considerada valida.
@@ -1001,7 +1043,7 @@ namespace
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glActiveTexture(GL_TEXTURE0);
+                AtivarUnidadeDeTextura(GL_TEXTURE0);
                 m_textureSentKnown = false;
             }
             if (m_instanceBuffer == 0)
@@ -1145,28 +1187,23 @@ namespace
                     memcpy(&rows[0], boneMatrices, byteCount);
                     m_boneBuffer = m_boneBuffers[m_boneBufferIndex];
                     m_boneBufferIndex = (m_boneBufferIndex + 1) % 3;
-                    glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
-                    // Orphaning explicito evita esperar uma leitura da paleta
-                    // pelo GPU antes de gravar a pose seguinte.
-                    //
-                    // O tamanho e o do BLOCO, nao o da pose. Com byteCount o buffer
-                    // era reduzido ao tamanho da paleta desta malha (boneCount*48,
-                    // tipicamente uma fracao dos 9600 bytes do bloco) e passava a
-                    // violar o minimo exigido pelo GLES3/WebGL2 -- derrubando com
-                    // GL_INVALID_OPERATION nao so esta malha, mas todo draw seguinte
-                    // do mesmo programa enquanto este buffer continuasse no binding.
-                    glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(kBoneBlockBytes), NULL, GL_STREAM_DRAW);
+                    LigarUniformBuffer(m_boneBuffer);
+                    // Sem orphaning por pose: os tres buffers ja nascem com o bloco
+                    // inteiro em CreateProgram e a rotacao entre eles ja evita gravar
+                    // onde o GPU ainda le. Um glBufferData por pose custava 213
+                    // realocacoes de 9.600 bytes por quadro (1,95 MB/quadro medidos)
+                    // para gravar 449 bytes em media.
                     glBufferSubData(GL_UNIFORM_BUFFER, 0, static_cast<GLsizeiptr>(byteCount), &rows[0]);
                     ++m_frameStats.bufferDataCalls;
                     ++m_frameStats.bufferSubDataCalls;
                     m_frameStats.bonePaletteUploadBytes += static_cast<unsigned long long>(byteCount);
                 }
-                glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
-                glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_boneBuffer);
+                LigarUniformBuffer(m_boneBuffer);
+                LigarPaletaNoBinding0(m_boneBuffer);
             }
             if (!UniformCacheActive() || !m_textureSentKnown || m_textureSent != m_texture)
             {
-                glActiveTexture(GL_TEXTURE0);
+                AtivarUnidadeDeTextura(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 m_textureSent = m_texture;
                 m_textureSentKnown = true;
@@ -1225,7 +1262,7 @@ namespace
             for (size_t i = 0; i < count; ++i)
                 memcpy(&m_instancePalette[i * rowTexels * 4], instances[i].boneMatrices, boneCount * 12 * sizeof(float));
 
-            glActiveTexture(GL_TEXTURE1);
+            AtivarUnidadeDeTextura(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, m_bonePaletteTexture);
             // glTexImage2D REALOCA o armazenamento. Chamado por lote, ele criava
             // uma bolha de pipeline por draw e foi metade do custo que fez o
@@ -1292,7 +1329,7 @@ namespace
             if (m_bonePaletteLocation >= 0)
                 glUniform1i(m_bonePaletteLocation, 1);
 
-            glActiveTexture(GL_TEXTURE0);
+            AtivarUnidadeDeTextura(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_texture);
             m_textureSent = m_texture;
             m_textureSentKnown = true;
@@ -1444,20 +1481,27 @@ namespace
             const StaticMesh& mesh = m_staticMeshes[slot];
             return mesh.alive ? &mesh : NULL;
         }
-        void EnsureVertexBufferCapacity(GLsizeiptr requiredBytes)
+        // TESTADO E DESCARTADO: anel de streaming com offset crescente.
+        //
+        // A hipotese era que gravar sempre no offset 0, na frente de draws que ainda
+        // liam aquele intervalo, forcasse o driver a serializar. Implementado com
+        // offset crescente e glVertexAttribPointer por lote (o WebGL2 nao tem
+        // glDrawElementsBaseVertex), o resultado em Lorencia foi 31,4 contra 33,5 fps
+        // -- dentro do ruido, e ainda cobrando 4 chamadas por lote e ~3 MB por quadro
+        // de realocacao no descarte do anel. O custo do bufferSubData aqui NAO e
+        // conflito de acesso; e o volume: 956 chamadas e 2,88 MB por quadro, porque o
+        // caminho imediato reenvia a geometria toda a cada quadro.
+        void GarantirCapacidadeDeVertices(GLsizeiptr requiredBytes)
         {
             if (requiredBytes <= m_vertexBufferCapacity)
                 return;
 
-            // Crescimento geometrico evita realocar o VBO para cada draw. WebGL
-            // reutiliza este armazenamento via BufferSubData; no desktop e o mesmo
-            // caminho seguro antes de introduzir um ring buffer persistente.
-            GLsizeiptr newCapacity = (m_vertexBufferCapacity > 0) ? m_vertexBufferCapacity : 4096;
-            while (newCapacity < requiredBytes)
-                newCapacity *= 2;
-            glBufferData(GL_ARRAY_BUFFER, newCapacity, NULL, GL_STREAM_DRAW);
+            GLsizeiptr nova = (m_vertexBufferCapacity > 0) ? m_vertexBufferCapacity : 4096;
+            while (nova < requiredBytes)
+                nova *= 2;
+            glBufferData(GL_ARRAY_BUFFER, nova, NULL, GL_STREAM_DRAW);
             ++m_frameStats.bufferDataCalls;
-            m_vertexBufferCapacity = newCapacity;
+            m_vertexBufferCapacity = nova;
         }
         void EnsureQuadIndexCapacity(size_t requiredQuads)
         {
@@ -1612,11 +1656,11 @@ namespace
             // deste programa (UI, sprites, terreno) morria com GL_INVALID_OPERATION.
             for (int i = 0; i < 3; ++i)
             {
-                glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffers[i]);
+                LigarUniformBuffer(m_boneBuffers[i]);
                 glBufferData(GL_UNIFORM_BUFFER, static_cast<GLsizeiptr>(kBoneBlockBytes), NULL, GL_STREAM_DRAW);
             }
-            glBindBuffer(GL_UNIFORM_BUFFER, m_boneBuffer);
-            glBindBufferBase(GL_UNIFORM_BUFFER, 0, m_boneBuffer);
+            LigarUniformBuffer(m_boneBuffer);
+            LigarPaletaNoBinding0(m_boneBuffer);
             glBindVertexArray(m_vertexArray);
             glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_quadIndexBuffer);
@@ -1661,6 +1705,10 @@ namespace
         GLuint m_boneBlockIndex;
         GLuint m_boneBuffer;
         GLuint m_boneBuffers[3];
+        // Espelho do estado de objeto; ver AtivarUnidadeDeTextura.
+        GLenum m_unidadeTexturaAtiva;
+        GLuint m_uniformBufferLigado;
+        GLuint m_uniformBufferBase0;
         unsigned int m_boneBufferIndex;
         GLint m_textureLocation;
         GLint m_useTextureLocation;
